@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ziadkadry99/auto-doc/internal/config"
@@ -19,11 +20,11 @@ import (
 type mockProvider struct {
 	response *llm.CompletionResponse
 	err      error
-	calls    int
+	calls    atomic.Int64
 }
 
 func (m *mockProvider) Complete(_ context.Context, req llm.CompletionRequest) (*llm.CompletionResponse, error) {
-	m.calls++
+	m.calls.Add(1)
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -432,9 +433,9 @@ func TestBatcher_ProcessFiles(t *testing.T) {
 	}
 
 	analyzer := NewFileAnalyzer(provider, config.QualityLite, "test-model")
-	var progressCalls int
+	var progressCalls atomic.Int64
 	batcher := NewBatcher(2, analyzer, func(processed, total int, file string) {
-		progressCalls++
+		progressCalls.Add(1)
 	})
 
 	files := make([]walker.FileInfo, 3)
@@ -453,8 +454,8 @@ func TestBatcher_ProcessFiles(t *testing.T) {
 	if len(result.Errors) != 0 {
 		t.Errorf("expected 0 errors, got %d: %v", len(result.Errors), result.Errors)
 	}
-	if progressCalls != 3 {
-		t.Errorf("expected 3 progress calls, got %d", progressCalls)
+	if progressCalls.Load() != 3 {
+		t.Errorf("expected 3 progress calls, got %d", progressCalls.Load())
 	}
 }
 
