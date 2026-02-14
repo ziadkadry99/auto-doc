@@ -15,6 +15,7 @@
   <a href="#features">Features</a> &bull;
   <a href="#commands">Commands</a> &bull;
   <a href="#configuration">Configuration</a> &bull;
+  <a href="#github-pages">GitHub Pages</a> &bull;
   <a href="#mcp-integration">MCP Integration</a>
 </p>
 
@@ -196,6 +197,24 @@ exclude:
 | `OPENAI_API_KEY` | OpenAI provider / OpenAI embeddings |
 | `GOOGLE_API_KEY` | Google provider |
 | `OLLAMA_HOST` | Custom Ollama endpoint (default: `http://localhost:11434`) |
+
+## GitHub Pages
+
+autodoc includes a GitHub Actions workflow to automatically generate and deploy your documentation to GitHub Pages on every push.
+
+### Setup
+
+1. **Enable GitHub Pages** in your repo settings: Settings > Pages > Source > **GitHub Actions**
+
+2. **Add repository secrets** (Settings > Secrets and variables > Actions):
+   - `GOOGLE_API_KEY` — your Google AI API key (or swap the provider in the workflow)
+   - `OPENAI_API_KEY` — for embeddings in CI (since Ollama isn't available)
+
+3. **Push to `main`** — the workflow runs automatically, or trigger it manually from the Actions tab.
+
+The workflow builds autodoc from source, generates documentation, creates the static site, and deploys it. The CI config uses `gemini-2.0-flash` with `normal` quality for faster/cheaper builds.
+
+To customize the CI generation settings, edit `.github/workflows/pages.yml` and modify the inline `.autodoc.ci.yml` config.
 
 ## MCP Integration
 

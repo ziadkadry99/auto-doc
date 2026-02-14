@@ -1,0 +1,78 @@
+name: Deploy Docs to GitHub Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".autodoc.yml"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Build autodoc
+        run: go build -o autodoc .
+
+      - name: Create CI config
+        run: |
+          cat > .autodoc.ci.yml <<'EOF'
+          provider: google
+          model: gemini-2.0-flash
+          embedding_provider: openai
+          embedding_model: text-embedding-3-small
+          quality: normal
+          output_dir: .autodoc
+          include:
+            - "**/*"
+          exclude:
+            - "node_modules/**"
+            - "vendor/**"
+            - ".git/**"
+            - "dist/**"
+            - ".autodoc/**"
+            - ".claude/**"
+            - "testdata/**"
+            - "*.exe"
+          max_concurrency: 4
+          EOF
+
+      - name: Generate documentation
+        run: ./autodoc generate --config .autodoc.ci.yml
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Generate static site
+        run: ./autodoc site --config .autodoc.ci.yml
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .autodoc/site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
