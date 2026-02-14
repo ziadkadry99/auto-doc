@@ -15,15 +15,15 @@ const googleEmbedEndpoint = "https://generativelanguage.googleapis.com/v1beta/mo
 type GoogleModel string
 
 const (
-	ModelTextEmbedding004 GoogleModel = "text-embedding-004"
+	ModelGeminiEmbedding001 GoogleModel = "gemini-embedding-001"
 )
 
 func (m GoogleModel) dimensions() int {
 	switch m {
-	case ModelTextEmbedding004:
-		return 768
+	case ModelGeminiEmbedding001:
+		return 3072
 	default:
-		return 768
+		return 3072
 	}
 }
 

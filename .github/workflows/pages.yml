@@ -42,7 +42,7 @@ jobs:
           provider: google
           model: gemini-2.0-flash
           embedding_provider: google
-          embedding_model: text-embedding-004
+          embedding_model: gemini-embedding-001
           quality: normal
           output_dir: .autodoc
           include:
