@@ -29,6 +29,12 @@ func createEmbedderFromConfig(cfg *config.Config) (embeddings.Embedder, error) {
 			return nil, fmt.Errorf("OPENAI_API_KEY environment variable is required for OpenAI embeddings")
 		}
 		return embeddings.NewOpenAIEmbedder(apiKey, embeddings.OpenAIModel(model)), nil
+	case config.ProviderGoogle:
+		apiKey := os.Getenv(config.APIKeyEnvVar(config.ProviderGoogle))
+		if apiKey == "" {
+			return nil, fmt.Errorf("GOOGLE_API_KEY environment variable is required for Google embeddings")
+		}
+		return embeddings.NewGoogleEmbedder(apiKey, embeddings.GoogleModel(model)), nil
 	case config.ProviderOllama:
 		return embeddings.NewOllamaEmbedder(model, 768, ""), nil
 	default:

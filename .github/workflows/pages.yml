@@ -41,8 +41,8 @@ jobs:
           cat > .autodoc.ci.yml <<'EOF'
           provider: google
           model: gemini-2.0-flash
-          embedding_provider: openai
-          embedding_model: text-embedding-3-small
+          embedding_provider: google
+          embedding_model: text-embedding-004
           quality: normal
           output_dir: .autodoc
           include:
@@ -63,7 +63,6 @@ jobs:
         run: ./autodoc generate --config .autodoc.ci.yml
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       - name: Generate static site
         run: ./autodoc site --config .autodoc.ci.yml

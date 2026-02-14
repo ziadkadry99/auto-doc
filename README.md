@@ -174,7 +174,7 @@ autodoc query "how does auth work" --json --limit 5
 ```yaml
 provider: anthropic          # anthropic, openai, google, ollama
 model: claude-sonnet-4-5-20250929
-embedding_provider: openai   # openai or ollama
+embedding_provider: openai   # openai, google, or ollama
 embedding_model: text-embedding-3-small
 quality: normal              # lite, normal, max
 output_dir: .autodoc
@@ -206,9 +206,8 @@ autodoc includes a GitHub Actions workflow to automatically generate and deploy 
 
 1. **Enable GitHub Pages** in your repo settings: Settings > Pages > Source > **GitHub Actions**
 
-2. **Add repository secrets** (Settings > Secrets and variables > Actions):
-   - `GOOGLE_API_KEY` — your Google AI API key (or swap the provider in the workflow)
-   - `OPENAI_API_KEY` — for embeddings in CI (since Ollama isn't available)
+2. **Add repository secret** (Settings > Secrets and variables > Actions):
+   - `GOOGLE_API_KEY` — your Google AI API key (used for both generation and embeddings)
 
 3. **Push to `main`** — the workflow runs automatically, or trigger it manually from the Actions tab.
 
