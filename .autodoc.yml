@@ -1,0 +1,21 @@
+provider: google
+model: gemini-3-pro-preview
+embedding_provider: ollama
+embedding_model: nomic-embed-text
+quality: max
+output_dir: .autodoc
+include:
+  - "**/*"
+exclude:
+  - "node_modules/**"
+  - "vendor/**"
+  - ".git/**"
+  - "dist/**"
+  - ".autodoc/**"
+  - ".claude/**"
+  - "testdata/**"
+  - "*.exe"
+max_concurrency: 1
+ci:
+  auto_commit: true
+  fail_on_error: false

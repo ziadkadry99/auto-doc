@@ -1,0 +1,32 @@
+# Binary
+autodoc
+autodoc.exe
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+
+# Secrets
+.env
+.env.*
+
+# Auto Doc output (generated)
+.autodoc/
+
+# Claude Code
+.claude/
+
+# Backup files
+*~
