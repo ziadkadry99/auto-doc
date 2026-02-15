@@ -84,5 +84,13 @@ func sanitizeID(s string) string {
 // escapeMermaid escapes characters that have special meaning in mermaid labels.
 func escapeMermaid(s string) string {
 	s = strings.ReplaceAll(s, "\"", "#quot;")
+	s = strings.ReplaceAll(s, "(", "#lpar;")
+	s = strings.ReplaceAll(s, ")", "#rpar;")
+	s = strings.ReplaceAll(s, "[", "#lsqb;")
+	s = strings.ReplaceAll(s, "]", "#rsqb;")
+	s = strings.ReplaceAll(s, "{", "#lbrace;")
+	s = strings.ReplaceAll(s, "}", "#rbrace;")
+	s = strings.ReplaceAll(s, "<", "#lt;")
+	s = strings.ReplaceAll(s, ">", "#gt;")
 	return s
 }

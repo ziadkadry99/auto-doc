@@ -75,4 +75,17 @@ func TestEscapeMermaid(t *testing.T) {
 	if !strings.Contains(got, "#quot;") {
 		t.Errorf("expected escaped quotes, got: %s", got)
 	}
+
+	got = escapeMermaid("Factory (pattern) support")
+	if strings.Contains(got, "(") || strings.Contains(got, ")") {
+		t.Errorf("expected escaped parens, got: %s", got)
+	}
+	if !strings.Contains(got, "#lpar;") || !strings.Contains(got, "#rpar;") {
+		t.Errorf("expected #lpar; and #rpar;, got: %s", got)
+	}
+
+	got = escapeMermaid("map[string]bool")
+	if strings.Contains(got, "[") || strings.Contains(got, "]") {
+		t.Errorf("expected escaped brackets, got: %s", got)
+	}
 }
