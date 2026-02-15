@@ -28,6 +28,8 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -59,8 +61,28 @@ jobs:
           max_concurrency: 4
           EOF
 
-      - name: Generate documentation
-        run: ./autodoc generate --config .autodoc.ci.yml
+      - name: Restore docs cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .autodoc
+          key: autodoc-${{ hashFiles('**/*.go', 'go.mod', 'go.sum') }}
+          restore-keys: |
+            autodoc-
+
+      - name: Generate or update documentation
+        run: |
+          if [ -d ".autodoc/docs" ] && [ -f ".autodoc/state.json" ]; then
+            echo "Cache found — running incremental update"
+            ./autodoc update --config .autodoc.ci.yml || {
+              echo "Update failed — falling back to full generate"
+              rm -rf .autodoc
+              ./autodoc generate --config .autodoc.ci.yml
+            }
+          else
+            echo "No cache — running full generate"
+            ./autodoc generate --config .autodoc.ci.yml
+          fi
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
