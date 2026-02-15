@@ -66,6 +66,13 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Load stored analyses for dependency expansion.
+	storedAnalyses, err := indexer.LoadAnalyses(rootDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not load analyses cache: %v\n", err)
+		storedAnalyses = make(map[string]indexer.FileAnalysis)
+	}
+
 	// Determine changed files.
 	var modified, added, deleted []string
 	if force {
@@ -114,7 +121,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading vector store (run `autodoc generate` first): %w", err)
 	}
 
-	// Handle deleted files: remove docs and vector entries.
+	// Handle deleted files: remove docs, vector entries, and analyses.
 	deletedCount := 0
 	for _, filePath := range deleted {
 		// Remove vector store entries.
@@ -128,13 +135,16 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "Warning: failed to remove doc %s: %v\n", docPath, err)
 		}
 
-		// Remove from state.
+		// Remove from state and analyses.
 		delete(state.FileHashes, filePath)
+		delete(storedAnalyses, filePath)
 		deletedCount++
 	}
 
-	// Determine which files need processing.
+	// Expand changed files via dependency graph (skip in force mode).
+	var directlyChanged, depAffected []string
 	var filesToProcess []walker.FileInfo
+
 	if force {
 		// Walk entire codebase for force mode.
 		allFiles, err := walker.Walk(walker.WalkerConfig{
@@ -148,16 +158,31 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 		filesToProcess = allFiles
 	} else {
-		// Build FileInfo for modified and added files.
-		changedPaths := make(map[string]bool)
-		for _, f := range modified {
-			changedPaths[f] = true
-		}
-		for _, f := range added {
-			changedPaths[f] = true
+		// Collect directly changed file paths.
+		directlyChanged = append(directlyChanged, modified...)
+		directlyChanged = append(directlyChanged, added...)
+
+		// Expand via dependency graph.
+		expandedPaths, affected := indexer.ExpandChangedFiles(directlyChanged, storedAnalyses)
+		depAffected = affected
+
+		if len(depAffected) > 0 {
+			fmt.Printf("Dependency analysis: %d directly changed files affect %d additional files\n",
+				len(directlyChanged), len(depAffected))
+			if verbose {
+				for _, f := range depAffected {
+					fmt.Fprintf(os.Stderr, "  dep-affected: %s\n", f)
+				}
+			}
 		}
 
-		// Walk the codebase and filter to only changed files.
+		// Build set of expanded paths for filtering.
+		expandedSet := make(map[string]bool)
+		for _, f := range expandedPaths {
+			expandedSet[f] = true
+		}
+
+		// Walk the codebase and filter to expanded files.
 		allFiles, err := walker.Walk(walker.WalkerConfig{
 			RootDir:     rootDir,
 			Include:     cfg.Include,
@@ -169,7 +194,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 
 		for _, f := range allFiles {
-			if changedPaths[f.RelPath] {
+			if expandedSet[f.RelPath] {
 				filesToProcess = append(filesToProcess, f)
 			}
 		}
@@ -190,12 +215,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			pipelineConcurrency = 4
 		}
 		analyzer := indexer.NewFileAnalyzer(llmProvider, cfg.Quality, cfg.Model)
-		batcher := indexer.NewBatcher(pipelineConcurrency, analyzer, nil)
 
 		// Set up progress reporting.
 		reporter := progress.NewReporter()
 		reporter.Start(len(filesToProcess))
-		batcher = indexer.NewBatcher(pipelineConcurrency, analyzer, func(processed int, total int, currentFile string) {
+		batcher := indexer.NewBatcher(pipelineConcurrency, analyzer, func(processed int, total int, currentFile string) {
 			reporter.Update(processed, currentFile)
 		})
 
@@ -222,8 +246,15 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			}
 
 			state.FileHashes[ar.Analysis.FilePath] = ar.Analysis.ContentHash
+			// Merge new analysis into stored analyses.
+			storedAnalyses[ar.Analysis.FilePath] = *ar.Analysis
 			updatedCount++
 		}
+	}
+
+	// Save updated analyses.
+	if err := indexer.SaveAnalyses(rootDir, storedAnalyses); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to save analyses cache: %v\n", err)
 	}
 
 	// Persist the vector store.
@@ -231,8 +262,20 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("persisting vector store: %w", err)
 	}
 
-	// Regenerate enhanced index and interactive map since features may have shifted.
-	// Walk all files for the full doc regeneration.
+	// Determine which high-level docs to regenerate.
+	var regenAdvice *indexer.RegenerationAdvice
+	if !force && (updatedCount > 0 || deletedCount > 0) {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Asking LLM which docs need regeneration...\n")
+		}
+		regenAdvice, err = indexer.DecideRegeneration(ctx, llmProvider, cfg.Model, directlyChanged, depAffected, storedAnalyses)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: regeneration decision failed, regenerating all: %v\n", err)
+			regenAdvice = nil // will fall through to regenerate everything
+		}
+	}
+
+	// Walk all files for doc regeneration.
 	allFiles, err := walker.Walk(walker.WalkerConfig{
 		RootDir:     rootDir,
 		Include:     cfg.Include,
@@ -254,25 +297,36 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Regenerate enhanced index.
-		if verbose {
-			fmt.Fprintf(os.Stderr, "Regenerating enhanced home page...\n")
-		}
-		if err := docGen.GenerateEnhancedIndex(ctx, allDocs, llmProvider, cfg.Model); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: enhanced index regeneration failed: %v\n", err)
-			if err := docGen.GenerateIndex(allDocs); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to generate index: %v\n", err)
+		// Conditionally regenerate high-level docs based on LLM advice.
+		shouldRegenOverview := force || regenAdvice == nil || regenAdvice.ProjectOverview
+		shouldRegenArch := force || regenAdvice == nil || regenAdvice.Architecture
+		// FeaturePages and ComponentMap are currently part of the enhanced index generation.
+		// We use overview as a proxy since they're generated together.
+
+		if shouldRegenOverview {
+			if verbose {
+				fmt.Fprintf(os.Stderr, "Regenerating enhanced home page...\n")
 			}
+			if err := docGen.GenerateEnhancedIndex(ctx, allDocs, llmProvider, cfg.Model); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: enhanced index regeneration failed: %v\n", err)
+				if err := docGen.GenerateIndex(allDocs); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to generate index: %v\n", err)
+				}
+			}
+		} else if verbose {
+			fmt.Fprintf(os.Stderr, "Skipping home page regeneration (LLM advised no change needed)\n")
 		}
 
 		// Architecture overview for Normal and Max tiers.
-		if cfg.Quality != config.QualityLite {
+		if cfg.Quality != config.QualityLite && shouldRegenArch {
 			if verbose {
 				fmt.Fprintf(os.Stderr, "Regenerating architecture overview...\n")
 			}
 			if err := docGen.GenerateArchitecture(ctx, allDocs, llmProvider, cfg.Model); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: architecture regeneration failed: %v\n", err)
 			}
+		} else if cfg.Quality != config.QualityLite && verbose {
+			fmt.Fprintf(os.Stderr, "Skipping architecture regeneration (LLM advised no change needed)\n")
 		}
 	}
 
@@ -289,20 +343,27 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	duration := time.Since(start)
 	fmt.Println()
 	fmt.Println("Incremental update complete!")
-	fmt.Printf("  Files updated:   %d\n", updatedCount)
-	fmt.Printf("  Files deleted:   %d\n", deletedCount)
-	fmt.Printf("  Files unchanged: %d\n", unchangedCount)
+	fmt.Printf("  Files updated:     %d\n", updatedCount)
+	if len(depAffected) > 0 {
+		fmt.Printf("  Dep-affected:      %d\n", len(depAffected))
+	}
+	fmt.Printf("  Files deleted:     %d\n", deletedCount)
+	fmt.Printf("  Files unchanged:   %d\n", unchangedCount)
 
 	if totalInputTokens > 0 || totalOutputTokens > 0 {
-		fmt.Printf("  Tokens used:     %d input, %d output\n", totalInputTokens, totalOutputTokens)
+		fmt.Printf("  Tokens used:       %d input, %d output\n", totalInputTokens, totalOutputTokens)
 		cost := llm.EstimateCost(cfg.Model, totalInputTokens, totalOutputTokens)
 		if cost > 0 {
-			fmt.Printf("  Estimated cost:  $%.4f\n", cost)
+			fmt.Printf("  Estimated cost:    $%.4f\n", cost)
 		}
 	}
 
-	fmt.Printf("  Duration:        %s\n", duration.Round(time.Millisecond))
-	fmt.Printf("  Output:          %s\n", cfg.OutputDir)
+	fmt.Printf("  Duration:          %s\n", duration.Round(time.Millisecond))
+	fmt.Printf("  Output:            %s\n", cfg.OutputDir)
+
+	if regenAdvice != nil && regenAdvice.Reasoning != "" {
+		fmt.Printf("  Regen decision:    %s\n", regenAdvice.Reasoning)
+	}
 
 	if len(pipelineErrors) > 0 {
 		fmt.Fprintf(os.Stderr, "\nWarnings (%d):\n", len(pipelineErrors))

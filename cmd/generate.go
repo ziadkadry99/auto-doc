@@ -180,6 +180,15 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("pipeline failed: %w", err)
 	}
 
+	// Save analyses for dependency-aware incremental updates.
+	if len(result.Analyses) > 0 {
+		if err := indexer.SaveAnalyses(rootDir, result.Analyses); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save analyses cache: %v\n", err)
+		} else if verbose {
+			fmt.Fprintf(os.Stderr, "Saved %d analyses to .autodoc/analyses.json\n", len(result.Analyses))
+		}
+	}
+
 	// Generate markdown documentation.
 	docGen := docs.NewDocGenerator(cfg.OutputDir)
 	docGen.BusinessContext = businessCtx

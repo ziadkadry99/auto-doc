@@ -66,6 +66,7 @@ type PipelineResult struct {
 	EstimatedCost     float64
 	Duration          time.Duration
 	Errors            []error
+	Analyses          map[string]FileAnalysis
 }
 
 // CostEstimate provides a cost breakdown without making API calls.

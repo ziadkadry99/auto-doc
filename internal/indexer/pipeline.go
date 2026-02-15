@@ -47,7 +47,9 @@ func (p *Pipeline) SetProgressFunc(fn ProgressFunc) {
 // Run executes the full indexing pipeline.
 func (p *Pipeline) Run(ctx context.Context, files []walker.FileInfo) (*PipelineResult, error) {
 	start := time.Now()
-	result := &PipelineResult{}
+	result := &PipelineResult{
+		Analyses: make(map[string]FileAnalysis),
+	}
 
 	// Load or create state.
 	state, err := LoadState(p.rootDir)
@@ -107,6 +109,7 @@ func (p *Pipeline) Run(ctx context.Context, files []walker.FileInfo) (*PipelineR
 		} else {
 			state.FileHashes[ar.Analysis.FilePath] = ar.Analysis.ContentHash
 		}
+		result.Analyses[ar.Analysis.FilePath] = *ar.Analysis
 		result.FilesProcessed++
 	}
 
