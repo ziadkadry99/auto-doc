@@ -20,6 +20,7 @@ type SiteGenerator struct {
 	DocsDir     string
 	OutputDir   string
 	ProjectName string
+	LogoPath    string // Path to a logo image file (relative to project root).
 }
 
 // NewSiteGenerator creates a SiteGenerator with the given directories.
@@ -35,6 +36,7 @@ func NewSiteGenerator(docsDir, outputDir, projectName string) *SiteGenerator {
 type pageData struct {
 	Title       string
 	ProjectName string
+	LogoFile    string // Filename of the logo in the output dir (empty if none).
 	Content     template.HTML
 	TreeHTML    template.HTML
 	BasePath    string
@@ -101,6 +103,21 @@ func (g *SiteGenerator) Generate() (int, error) {
 		return 0, err
 	}
 
+	// Copy logo if configured.
+	var logoFile string
+	if g.LogoPath != "" {
+		logoData, err := os.ReadFile(g.LogoPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not read logo %s: %v\n", g.LogoPath, err)
+		} else {
+			logoFile = "logo" + filepath.Ext(g.LogoPath)
+			if err := os.WriteFile(filepath.Join(g.OutputDir, logoFile), logoData, 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not write logo: %v\n", err)
+				logoFile = ""
+			}
+		}
+	}
+
 	// Initialize goldmark with extensions.
 	md := goldmark.New(
 		goldmark.WithExtensions(
@@ -125,7 +142,7 @@ func (g *SiteGenerator) Generate() (int, error) {
 
 	// Render each markdown file to HTML.
 	for _, relPath := range mdPaths {
-		if err := g.renderPage(md, tmpl, tree, relPath); err != nil {
+		if err := g.renderPage(md, tmpl, tree, relPath, logoFile); err != nil {
 			return 0, fmt.Errorf("rendering %s: %w", relPath, err)
 		}
 	}
@@ -155,7 +172,7 @@ func (g *SiteGenerator) Generate() (int, error) {
 }
 
 // renderPage converts a single markdown file to an HTML page.
-func (g *SiteGenerator) renderPage(md goldmark.Markdown, tmpl *template.Template, tree *FileTree, relPath string) error {
+func (g *SiteGenerator) renderPage(md goldmark.Markdown, tmpl *template.Template, tree *FileTree, relPath, logoFile string) error {
 	srcPath := filepath.Join(g.DocsDir, filepath.FromSlash(relPath))
 	content, err := os.ReadFile(srcPath)
 	if err != nil {
@@ -201,6 +218,7 @@ func (g *SiteGenerator) renderPage(md goldmark.Markdown, tmpl *template.Template
 	data := pageData{
 		Title:       title,
 		ProjectName: g.ProjectName,
+		LogoFile:    logoFile,
 		Content:     template.HTML(htmlContent),
 		TreeHTML:    template.HTML(treeHTML),
 		BasePath:    basePath,

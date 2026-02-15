@@ -13,6 +13,7 @@ const pageTemplate = `<!DOCTYPE html>
 <body>
   <nav class="sidebar" id="sidebar">
     <div class="sidebar-header">
+      {{if .LogoFile}}<a href="{{.BasePath}}index.html" class="sidebar-logo-link"><img src="{{.BasePath}}{{.LogoFile}}" alt="{{.ProjectName}}" class="sidebar-logo"></a>{{end}}
       <h2 class="project-title">{{.ProjectName}}</h2>
       <input type="text" id="search-input" placeholder="Search docs..." autocomplete="off">
     </div>
@@ -163,6 +164,18 @@ body {
   top: 0;
   background: var(--bg-sidebar);
   z-index: 1;
+}
+
+.sidebar-logo-link {
+  display: block;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.sidebar-logo {
+  max-width: 64px;
+  max-height: 64px;
+  border-radius: 8px;
 }
 
 .project-title {

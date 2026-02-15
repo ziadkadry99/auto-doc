@@ -15,6 +15,7 @@ exclude:
   - ".claude/**"
   - "testdata/**"
   - "*.exe"
+logo: assets/logo.png
 max_concurrency: 1
 ci:
   auto_commit: true

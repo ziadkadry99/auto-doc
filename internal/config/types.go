@@ -27,6 +27,7 @@ type Config struct {
 	EmbeddingModel    string       `yaml:"embedding_model" koanf:"embedding_model"`
 	Quality           QualityTier  `yaml:"quality" koanf:"quality"`
 	OutputDir         string       `yaml:"output_dir" koanf:"output_dir"`
+	Logo              string       `yaml:"logo" koanf:"logo"`
 	Include           []string     `yaml:"include" koanf:"include"`
 	Exclude           []string     `yaml:"exclude" koanf:"exclude"`
 	ContextFile       string       `yaml:"context_file" koanf:"context_file"`

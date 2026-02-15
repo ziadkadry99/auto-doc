@@ -58,6 +58,7 @@ jobs:
             - ".claude/**"
             - "testdata/**"
             - "*.exe"
+          logo: assets/logo.png
           max_concurrency: 4
           EOF
 

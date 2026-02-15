@@ -55,6 +55,7 @@ func runSite(cmd *cobra.Command, args []string) error {
 		projectName = "Documentation"
 	}
 	generator := site.NewSiteGenerator(docsDir, outputDir, projectName)
+	generator.LogoPath = cfg.Logo
 	pageCount, err := generator.Generate()
 	if err != nil {
 		return fmt.Errorf("generating site: %w", err)

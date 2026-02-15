@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/placeholder" width="120" alt="autodoc logo"/>
+  <img src="assets/logo.png" width="120" alt="autodoc logo"/>
 </p>
 
 <h1 align="center">autodoc</h1>
@@ -178,6 +178,7 @@ embedding_provider: openai   # openai, google, or ollama
 embedding_model: text-embedding-3-small
 quality: normal              # lite, normal, max
 output_dir: .autodoc
+logo: assets/logo.png        # optional — logo displayed in the docs site sidebar
 max_concurrency: 4
 
 include:
@@ -188,6 +189,16 @@ exclude:
   - ".git/**"
   - "dist/**"
 ```
+
+### Logo
+
+To display a logo in the generated documentation site sidebar, set the `logo` field in `.autodoc.yml` to the path of an image file (relative to the project root):
+
+```yaml
+logo: assets/logo.png
+```
+
+The logo appears above the project title in the sidebar navigation. Supported formats: PNG, JPG, SVG. The image is automatically copied into the generated site output.
 
 ### Environment Variables
 
