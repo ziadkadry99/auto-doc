@@ -953,14 +953,17 @@ const jsContent = `(function() {
   function setTheme(theme) {
     html.setAttribute("data-theme", theme);
     try { localStorage.setItem("autodoc-theme", theme); } catch(e) {}
-    // Re-initialize Mermaid with new theme
+    // Re-render Mermaid diagrams with the new theme
     if (typeof mermaid !== "undefined") {
       mermaid.initialize({ startOnLoad: false, theme: theme === "dark" ? "dark" : "default", securityLevel: "loose" });
       document.querySelectorAll(".mermaid").forEach(function(el) {
-        el.removeAttribute("data-processed");
-        el.innerHTML = el.textContent;
+        var src = el.getAttribute("data-source");
+        if (src) {
+          el.removeAttribute("data-processed");
+          el.innerHTML = src;
+        }
       });
-      mermaid.init(undefined, ".mermaid");
+      mermaid.run({ querySelector: ".mermaid" });
     }
   }
 
@@ -1246,6 +1249,12 @@ const jsContent = `(function() {
 
   // ===== Mermaid initialization =====
   if (typeof mermaid !== "undefined") {
+    // Store original source before Mermaid replaces it with SVG.
+    document.querySelectorAll(".mermaid").forEach(function(el) {
+      if (!el.getAttribute("data-source")) {
+        el.setAttribute("data-source", el.textContent);
+      }
+    });
     var isDark = html.getAttribute("data-theme") === "dark";
     mermaid.initialize({
       startOnLoad: true,

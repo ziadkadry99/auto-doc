@@ -140,7 +140,7 @@ Only output the Mermaid code, no fences.`, contextSection, summary.String())
 	}
 
 	data := parseEnhancedIndexResponse(resp.Content)
-	data.ProjectName = filepath.Base(g.OutputDir)
+	data.ProjectName = projectNameFromWd(g.OutputDir)
 	data.Analyses = analyses
 
 	// Build dependency diagram from file analyses.

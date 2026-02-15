@@ -52,7 +52,7 @@ var featureColors = []string{
 // GenerateInteractiveMap creates a self-contained HTML page with a D3.js
 // force-directed graph showing files, their feature groups, and dependencies.
 func (g *DocGenerator) GenerateInteractiveMap(analyses []indexer.FileAnalysis, features []Feature) error {
-	data := buildMapData(analyses, features, filepath.Base(g.OutputDir))
+	data := buildMapData(analyses, features, projectNameFromWd(g.OutputDir))
 
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {

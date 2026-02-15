@@ -80,7 +80,7 @@ func (g *DocGenerator) GenerateIndex(analyses []indexer.FileAnalysis) error {
 		Files       []indexer.FileAnalysis
 		QuickLinks  []quickLink
 	}{
-		ProjectName: filepath.Base(g.OutputDir),
+		ProjectName: projectNameFromWd(g.OutputDir),
 		Files:       analyses,
 		QuickLinks: []quickLink{
 			{Label: "Architecture", Href: "architecture.md"},
@@ -107,6 +107,15 @@ var templateFuncs = template.FuncMap{
 		s = strings.ReplaceAll(s, "\r", "")
 		return strings.TrimSpace(s)
 	},
+}
+
+// projectNameFromWd returns the current working directory's base name as the
+// project name. Falls back to filepath.Base(fallback) if Getwd fails.
+func projectNameFromWd(fallback string) string {
+	if wd, err := os.Getwd(); err == nil {
+		return filepath.Base(wd)
+	}
+	return filepath.Base(fallback)
 }
 
 // anchorize converts a heading into a GitHub-style markdown anchor.
