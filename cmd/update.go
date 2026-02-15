@@ -298,13 +298,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 
 		// Conditionally regenerate high-level docs based on LLM advice.
-		shouldRegenOverview := force || regenAdvice == nil || regenAdvice.ProjectOverview
+		// GenerateEnhancedIndex produces the overview, feature pages, and component map
+		// in a single pass, so trigger it if any of those need updating.
+		shouldRegenEnhanced := force || regenAdvice == nil ||
+			regenAdvice.ProjectOverview || regenAdvice.FeaturePages || regenAdvice.ComponentMap
 		shouldRegenArch := force || regenAdvice == nil || regenAdvice.Architecture
-		// FeaturePages and ComponentMap are currently part of the enhanced index generation.
-		// We use overview as a proxy since they're generated together.
 
-		if shouldRegenOverview {
-			fmt.Println("Regenerating project overview...")
+		if shouldRegenEnhanced {
+			fmt.Println("Regenerating project overview, features & component map...")
 			if err := docGen.GenerateEnhancedIndex(ctx, allDocs, llmProvider, cfg.Model); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: enhanced index regeneration failed: %v\n", err)
 				if err := docGen.GenerateIndex(allDocs); err != nil {
@@ -312,7 +313,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 				}
 			}
 		} else {
-			fmt.Println("Skipping project overview (no change needed)")
+			fmt.Println("Skipping project overview, features & component map (no change needed)")
 		}
 
 		// Architecture overview for Normal and Max tiers.
