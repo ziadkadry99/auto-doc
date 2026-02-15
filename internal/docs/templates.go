@@ -104,6 +104,20 @@ const architectureTemplate = `# Architecture Overview
 {{ .Description }}
 {{ end }}
 {{- end }}
+{{ if .EntryPoints }}## Entry Points
+
+| Name | Type | Description |
+|------|------|-------------|
+{{ range .EntryPoints }}| {{ .Name }} | {{ .Type }} | {{ .Description }} |
+{{ end }}
+{{- end }}
+{{ if .ExitPoints }}## Exit Points
+
+| Name | Type | Description |
+|------|------|-------------|
+{{ range .ExitPoints }}| {{ .Name }} | {{ .Type }} | {{ .Description }} |
+{{ end }}
+{{- end }}
 {{ if .DataFlow }}## Data Flow
 
 {{ .DataFlow }}
@@ -146,6 +160,31 @@ const enhancedIndexTemplate = `# {{ .ProjectName }} — Documentation
 
 {{ .ProjectOverview }}
 {{ end }}
+{{ if .EntryPoints }}## Entry Points
+
+| Name | Type | Description |
+|------|------|-------------|
+{{ range .EntryPoints }}| {{ .Name }} | {{ .Type }} | {{ .Description }} |
+{{ end }}
+{{- end }}
+{{ if .ExitPoints }}## Exit Points
+
+| Name | Type | Description |
+|------|------|-------------|
+{{ range .ExitPoints }}| {{ .Name }} | {{ .Type }} | {{ .Description }} |
+{{ end }}
+{{- end }}
+{{ if .Usages }}## Usage Examples
+{{ range .Usages }}
+### {{ .Title }}
+
+` + "```" + `
+{{ .Command }}
+` + "```" + `
+
+{{ .Description }}
+{{ end }}
+{{- end }}
 {{ if .ArchDiagram }}## Architecture
 
 ` + "```mermaid\n{{ .ArchDiagram }}\n```" + `

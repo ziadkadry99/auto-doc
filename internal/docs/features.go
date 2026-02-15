@@ -24,11 +24,29 @@ type Feature struct {
 	Files               []string
 }
 
+// EntryPoint represents a way users or systems interact with the project.
+type EntryPoint struct {
+	Name, Type, Description string
+}
+
+// ExitPoint represents an output or side effect produced by the project.
+type ExitPoint struct {
+	Name, Type, Description string
+}
+
+// UsageExample represents a concrete usage example with a command and description.
+type UsageExample struct {
+	Title, Command, Description string
+}
+
 // EnhancedIndex holds data for the enhanced home page generation.
 type EnhancedIndex struct {
 	ProjectName     string
 	ProjectOverview string
 	Features        []Feature
+	EntryPoints     []EntryPoint
+	ExitPoints      []ExitPoint
+	Usages          []UsageExample
 	ArchDiagram     string
 	DepDiagram      string
 	Analyses        []indexer.FileAnalysis
@@ -81,6 +99,27 @@ FILES: comma-separated file paths
 
 Every file must belong to exactly one feature. Aim for 4-12 features.
 
+===ENTRY_POINTS===
+List every way a user or external system can interact with this project (CLI commands, API endpoints, MCP tools, event handlers, etc.).
+Each entry as:
+ENTRY: Name of the entry point
+TYPE: Category (e.g. CLI Command, API Endpoint, MCP Tool, Event Handler)
+DESCRIPTION: What it does
+
+===EXIT_POINTS===
+List every output or side effect this project produces (files written, API calls made, databases updated, messages sent, etc.).
+Each entry as:
+EXIT: Name of the exit point
+TYPE: Category (e.g. File Output, API Call, Database Write, Network Request)
+DESCRIPTION: What it produces
+
+===USAGES===
+Provide concrete usage examples showing every major way to use this tool.
+Each example as:
+EXAMPLE: Short title
+COMMAND: The exact command or code to run
+DESCRIPTION: What happens when you run this and what to expect
+
 ===ARCHITECTURE_DIAGRAM===
 A Mermaid "graph TD" diagram showing the high-level architecture.
 Show layers (e.g. API, Core, Storage, Tools) and key components within each.
@@ -93,7 +132,7 @@ Only output the Mermaid code, no fences.`, contextSection, summary.String())
 			{Role: llm.RoleSystem, Content: "You are a software architect analyzing a codebase. Be concise and factual. Group files by logical feature areas."},
 			{Role: llm.RoleUser, Content: prompt},
 		},
-		MaxTokens:   8192,
+		MaxTokens:   12288,
 		Temperature: 0.3,
 	})
 	if err != nil {
@@ -202,26 +241,42 @@ Only output the Mermaid code, no fences.`, contextSection, summary.String())
 func parseEnhancedIndexResponse(content string) EnhancedIndex {
 	var data EnhancedIndex
 
-	// Extract PROJECT_OVERVIEW section.
-	if idx := strings.Index(content, "===PROJECT_OVERVIEW==="); idx >= 0 {
-		after := content[idx+len("===PROJECT_OVERVIEW==="):]
-		end := len(after)
-		for _, marker := range []string{"===FEATURES===", "===ARCHITECTURE_DIAGRAM==="} {
-			if i := strings.Index(after, marker); i >= 0 && i < end {
+	// All section markers used in the enhanced index response.
+	allMarkers := []string{
+		"===PROJECT_OVERVIEW===",
+		"===FEATURES===",
+		"===ENTRY_POINTS===",
+		"===EXIT_POINTS===",
+		"===USAGES===",
+		"===ARCHITECTURE_DIAGRAM===",
+	}
+
+	// findSectionEnd returns the index of the nearest following section marker.
+	findSectionEnd := func(text, currentMarker string) int {
+		end := len(text)
+		for _, m := range allMarkers {
+			if m == currentMarker {
+				continue
+			}
+			if i := strings.Index(text, m); i >= 0 && i < end {
 				end = i
 			}
 		}
+		return end
+	}
+
+	// Extract PROJECT_OVERVIEW section.
+	if idx := strings.Index(content, "===PROJECT_OVERVIEW==="); idx >= 0 {
+		after := content[idx+len("===PROJECT_OVERVIEW==="):]
+		end := findSectionEnd(after, "===PROJECT_OVERVIEW===")
 		data.ProjectOverview = strings.TrimSpace(after[:end])
 	}
 
 	// Extract FEATURES section.
 	if idx := strings.Index(content, "===FEATURES==="); idx >= 0 {
 		after := content[idx+len("===FEATURES==="):]
-		// Trim at the next section marker if present.
-		if i := strings.Index(after, "===ARCHITECTURE_DIAGRAM==="); i >= 0 {
-			after = after[:i]
-		}
-		featuresText := strings.TrimSpace(after)
+		end := findSectionEnd(after, "===FEATURES===")
+		featuresText := strings.TrimSpace(after[:end])
 
 		// Split into feature blocks.
 		lines := strings.Split(featuresText, "\n")
@@ -256,6 +311,93 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 		if current != nil {
 			current.Slug = slugify(current.Name)
 			data.Features = append(data.Features, *current)
+		}
+	}
+
+	// Extract ENTRY_POINTS section.
+	if idx := strings.Index(content, "===ENTRY_POINTS==="); idx >= 0 {
+		after := content[idx+len("===ENTRY_POINTS==="):]
+		end := findSectionEnd(after, "===ENTRY_POINTS===")
+		lines := strings.Split(strings.TrimSpace(after[:end]), "\n")
+		var current *EntryPoint
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "ENTRY:") {
+				if current != nil {
+					data.EntryPoints = append(data.EntryPoints, *current)
+				}
+				current = &EntryPoint{
+					Name: strings.TrimSpace(strings.TrimPrefix(line, "ENTRY:")),
+				}
+			} else if strings.HasPrefix(line, "TYPE:") && current != nil {
+				current.Type = strings.TrimSpace(strings.TrimPrefix(line, "TYPE:"))
+			} else if strings.HasPrefix(line, "DESCRIPTION:") && current != nil {
+				current.Description = strings.TrimSpace(strings.TrimPrefix(line, "DESCRIPTION:"))
+			}
+		}
+		if current != nil {
+			data.EntryPoints = append(data.EntryPoints, *current)
+		}
+	}
+
+	// Extract EXIT_POINTS section.
+	if idx := strings.Index(content, "===EXIT_POINTS==="); idx >= 0 {
+		after := content[idx+len("===EXIT_POINTS==="):]
+		end := findSectionEnd(after, "===EXIT_POINTS===")
+		lines := strings.Split(strings.TrimSpace(after[:end]), "\n")
+		var current *ExitPoint
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "EXIT:") {
+				if current != nil {
+					data.ExitPoints = append(data.ExitPoints, *current)
+				}
+				current = &ExitPoint{
+					Name: strings.TrimSpace(strings.TrimPrefix(line, "EXIT:")),
+				}
+			} else if strings.HasPrefix(line, "TYPE:") && current != nil {
+				current.Type = strings.TrimSpace(strings.TrimPrefix(line, "TYPE:"))
+			} else if strings.HasPrefix(line, "DESCRIPTION:") && current != nil {
+				current.Description = strings.TrimSpace(strings.TrimPrefix(line, "DESCRIPTION:"))
+			}
+		}
+		if current != nil {
+			data.ExitPoints = append(data.ExitPoints, *current)
+		}
+	}
+
+	// Extract USAGES section.
+	if idx := strings.Index(content, "===USAGES==="); idx >= 0 {
+		after := content[idx+len("===USAGES==="):]
+		end := findSectionEnd(after, "===USAGES===")
+		lines := strings.Split(strings.TrimSpace(after[:end]), "\n")
+		var current *UsageExample
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "EXAMPLE:") {
+				if current != nil {
+					data.Usages = append(data.Usages, *current)
+				}
+				current = &UsageExample{
+					Title: strings.TrimSpace(strings.TrimPrefix(line, "EXAMPLE:")),
+				}
+			} else if strings.HasPrefix(line, "COMMAND:") && current != nil {
+				current.Command = strings.TrimSpace(strings.TrimPrefix(line, "COMMAND:"))
+			} else if strings.HasPrefix(line, "DESCRIPTION:") && current != nil {
+				current.Description = strings.TrimSpace(strings.TrimPrefix(line, "DESCRIPTION:"))
+			}
+		}
+		if current != nil {
+			data.Usages = append(data.Usages, *current)
 		}
 	}
 

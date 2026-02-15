@@ -17,6 +17,8 @@ import (
 type archData struct {
 	Overview       string
 	Components     []diagrams.Component
+	EntryPoints    []EntryPoint
+	ExitPoints     []ExitPoint
 	DataFlow       string
 	DesignPatterns []string
 	ArchDiagram    string
@@ -45,6 +47,20 @@ A 2-4 paragraph overview of the architecture.
 
 ===COMPONENTS===
 List each major component, one per line, in the format: ComponentName: Description
+
+===ENTRY_POINTS===
+List every way a user or external system can interact with this project (CLI commands, API endpoints, MCP tools, event handlers, etc.).
+Each entry as:
+ENTRY: Name of the entry point
+TYPE: Category (e.g. CLI Command, API Endpoint, MCP Tool, Event Handler)
+DESCRIPTION: What it does
+
+===EXIT_POINTS===
+List every output or side effect this project produces (files written, API calls made, databases updated, messages sent, etc.).
+Each entry as:
+EXIT: Name of the exit point
+TYPE: Category (e.g. File Output, API Call, Database Write, Network Request)
+DESCRIPTION: What it produces
 
 ===DATAFLOW===
 Describe how data flows through the system in 1-2 paragraphs.
@@ -118,32 +134,39 @@ List design patterns used, one per line.`, summary.String())
 func parseArchResponse(content string) archData {
 	var data archData
 
+	// All section markers used in the architecture response.
+	allArchMarkers := []string{
+		"===OVERVIEW===",
+		"===COMPONENTS===",
+		"===ENTRY_POINTS===",
+		"===EXIT_POINTS===",
+		"===DATAFLOW===",
+		"===PATTERNS===",
+	}
+
+	// findEnd returns the index of the nearest following section marker.
+	findEnd := func(text, currentMarker string) int {
+		end := len(text)
+		for _, m := range allArchMarkers {
+			if m == currentMarker {
+				continue
+			}
+			if i := strings.Index(text, m); i >= 0 && i < end {
+				end = i
+			}
+		}
+		return end
+	}
+
+	// Extract simple text sections.
 	sections := map[string]*string{
 		"===OVERVIEW===": &data.Overview,
 		"===DATAFLOW===": &data.DataFlow,
 	}
-
-	// Split by section markers and populate fields.
-	remaining := content
 	for marker, field := range sections {
-		if idx := strings.Index(remaining, marker); idx >= 0 {
-			after := remaining[idx+len(marker):]
-			// Find the next marker to delimit this section.
-			end := len(after)
-			for m := range sections {
-				if m == marker {
-					continue
-				}
-				if i := strings.Index(after, m); i >= 0 && i < end {
-					end = i
-				}
-			}
-			// Also check for ===COMPONENTS=== and ===PATTERNS===.
-			for _, m := range []string{"===COMPONENTS===", "===PATTERNS==="} {
-				if i := strings.Index(after, m); i >= 0 && i < end {
-					end = i
-				}
-			}
+		if idx := strings.Index(content, marker); idx >= 0 {
+			after := content[idx+len(marker):]
+			end := findEnd(after, marker)
 			*field = strings.TrimSpace(after[:end])
 		}
 	}
@@ -151,12 +174,7 @@ func parseArchResponse(content string) archData {
 	// Parse components.
 	if idx := strings.Index(content, "===COMPONENTS==="); idx >= 0 {
 		after := content[idx+len("===COMPONENTS==="):]
-		end := len(after)
-		for _, m := range []string{"===OVERVIEW===", "===DATAFLOW===", "===PATTERNS==="} {
-			if i := strings.Index(after, m); i >= 0 && i < end {
-				end = i
-			}
-		}
+		end := findEnd(after, "===COMPONENTS===")
 		lines := strings.Split(strings.TrimSpace(after[:end]), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
@@ -172,15 +190,68 @@ func parseArchResponse(content string) archData {
 		}
 	}
 
+	// Parse entry points.
+	if idx := strings.Index(content, "===ENTRY_POINTS==="); idx >= 0 {
+		after := content[idx+len("===ENTRY_POINTS==="):]
+		end := findEnd(after, "===ENTRY_POINTS===")
+		lines := strings.Split(strings.TrimSpace(after[:end]), "\n")
+		var current *EntryPoint
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "ENTRY:") {
+				if current != nil {
+					data.EntryPoints = append(data.EntryPoints, *current)
+				}
+				current = &EntryPoint{
+					Name: strings.TrimSpace(strings.TrimPrefix(line, "ENTRY:")),
+				}
+			} else if strings.HasPrefix(line, "TYPE:") && current != nil {
+				current.Type = strings.TrimSpace(strings.TrimPrefix(line, "TYPE:"))
+			} else if strings.HasPrefix(line, "DESCRIPTION:") && current != nil {
+				current.Description = strings.TrimSpace(strings.TrimPrefix(line, "DESCRIPTION:"))
+			}
+		}
+		if current != nil {
+			data.EntryPoints = append(data.EntryPoints, *current)
+		}
+	}
+
+	// Parse exit points.
+	if idx := strings.Index(content, "===EXIT_POINTS==="); idx >= 0 {
+		after := content[idx+len("===EXIT_POINTS==="):]
+		end := findEnd(after, "===EXIT_POINTS===")
+		lines := strings.Split(strings.TrimSpace(after[:end]), "\n")
+		var current *ExitPoint
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "EXIT:") {
+				if current != nil {
+					data.ExitPoints = append(data.ExitPoints, *current)
+				}
+				current = &ExitPoint{
+					Name: strings.TrimSpace(strings.TrimPrefix(line, "EXIT:")),
+				}
+			} else if strings.HasPrefix(line, "TYPE:") && current != nil {
+				current.Type = strings.TrimSpace(strings.TrimPrefix(line, "TYPE:"))
+			} else if strings.HasPrefix(line, "DESCRIPTION:") && current != nil {
+				current.Description = strings.TrimSpace(strings.TrimPrefix(line, "DESCRIPTION:"))
+			}
+		}
+		if current != nil {
+			data.ExitPoints = append(data.ExitPoints, *current)
+		}
+	}
+
 	// Parse patterns.
 	if idx := strings.Index(content, "===PATTERNS==="); idx >= 0 {
 		after := content[idx+len("===PATTERNS==="):]
-		end := len(after)
-		for _, m := range []string{"===OVERVIEW===", "===DATAFLOW===", "===COMPONENTS==="} {
-			if i := strings.Index(after, m); i >= 0 && i < end {
-				end = i
-			}
-		}
+		end := findEnd(after, "===PATTERNS===")
 		lines := strings.Split(strings.TrimSpace(after[:end]), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
