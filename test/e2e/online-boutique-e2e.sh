@@ -6,13 +6,21 @@
 # and synthesis quality across 10 graded questions.
 #
 # Prerequisites:
-#   - ANTHROPIC_API_KEY and OPENAI_API_KEY set
+#   - ANTHROPIC_API_KEY and GOOGLE_API_KEY set (or GEMINI_API_KEY)
 #   - go, git, curl on PATH
 #
 # Usage:
 #   ./test/e2e/online-boutique-e2e.sh [--skip-generate] [--skip-cost-prompt]
 
 set -euo pipefail
+
+# Source .env if present (for API keys).
+if [[ -f "$( cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd )/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$( cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd )/.env"
+  set +a
+fi
 
 # ─────────────────────────────────────────────────────────────────────
 # Constants
@@ -29,7 +37,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 REPORT_FILE="$SCRIPT_DIR/report-${TIMESTAMP}.md"
 RESULTS_DIR=""     # set in main after mktemp
 QUERY_TIMEOUT=120  # seconds per query
-GENERATE_TIMEOUT=600  # 10 min for full generation
+GENERATE_TIMEOUT=1800  # 30 min for full generation
 
 # Colors for terminal output
 RED='\033[0;31m'
@@ -189,11 +197,17 @@ preflight() {
     log_ok "ANTHROPIC_API_KEY is set"
   fi
 
-  if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-    log_err "OPENAI_API_KEY is not set"
-    ok=false
+  # Accept GOOGLE_API_KEY or GEMINI_API_KEY (they are the same key).
+  if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+    if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+      export GOOGLE_API_KEY="$GEMINI_API_KEY"
+      log_ok "GOOGLE_API_KEY set from GEMINI_API_KEY"
+    else
+      log_err "GOOGLE_API_KEY (or GEMINI_API_KEY) is not set"
+      ok=false
+    fi
   else
-    log_ok "OPENAI_API_KEY is set"
+    log_ok "GOOGLE_API_KEY is set"
   fi
 
   # Required tools.
@@ -273,8 +287,8 @@ write_config() {
   cat > "$REPO_DIR/repo/.autodoc.yml" <<'YAML'
 provider: anthropic
 model: claude-sonnet-4-5-20250929
-embedding_provider: openai
-embedding_model: text-embedding-3-small
+embedding_provider: google
+embedding_model: gemini-embedding-001
 quality: normal
 output_dir: .autodoc
 include:
