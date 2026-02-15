@@ -1152,6 +1152,27 @@ const jsContent = `(function() {
     });
   }
 
+  function localSearch(query) {
+    if (!searchIndex) return [];
+    var terms = query.toLowerCase().split(/\s+/);
+    var scored = [];
+    searchIndex.forEach(function(entry) {
+      var text = ((entry.title || "") + " " + (entry.summary || "") + " " + (entry.content || "")).toLowerCase();
+      var hits = 0;
+      terms.forEach(function(t) { if (text.indexOf(t) >= 0) hits++; });
+      if (hits > 0) {
+        scored.push({
+          file_path: entry.path.replace(/\.html$/, "").replace(/\.md$/, ""),
+          type: "file",
+          similarity: hits / terms.length,
+          content: entry.summary || entry.title || ""
+        });
+      }
+    });
+    scored.sort(function(a, b) { return b.similarity - a.similarity; });
+    return scored.slice(0, 10);
+  }
+
   if (aiSearchInput) {
     aiSearchInput.addEventListener("keydown", function(e) {
       if (e.key !== "Enter") return;
@@ -1166,10 +1187,9 @@ const jsContent = `(function() {
         body: JSON.stringify({ query: query, limit: 10 })
       })
       .then(function(r) {
-        if (!r.ok) {
-          return r.json().then(function(data) {
-            throw new Error(data.error || "Search request failed");
-          });
+        var ct = r.headers.get("content-type") || "";
+        if (!r.ok || ct.indexOf("application/json") === -1) {
+          throw new Error("_fallback_");
         }
         return r.json();
       })
@@ -1179,7 +1199,16 @@ const jsContent = `(function() {
         showAIResults(query, results, answer);
       })
       .catch(function(err) {
-        showAIError(err.message || "Search is not available. Make sure the server was started with a vector database.");
+        if (err.message === "_fallback_" || err instanceof SyntaxError) {
+          var local = localSearch(query);
+          if (local.length > 0) {
+            showAIResults(query, local, "");
+          } else {
+            showAIError("No results found for your query.");
+          }
+        } else {
+          showAIError(err.message || "Search failed.");
+        }
       });
     });
   }
