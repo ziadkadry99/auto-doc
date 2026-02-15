@@ -304,29 +304,25 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		// We use overview as a proxy since they're generated together.
 
 		if shouldRegenOverview {
-			if verbose {
-				fmt.Fprintf(os.Stderr, "Regenerating enhanced home page...\n")
-			}
+			fmt.Println("Regenerating project overview...")
 			if err := docGen.GenerateEnhancedIndex(ctx, allDocs, llmProvider, cfg.Model); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: enhanced index regeneration failed: %v\n", err)
 				if err := docGen.GenerateIndex(allDocs); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: failed to generate index: %v\n", err)
 				}
 			}
-		} else if verbose {
-			fmt.Fprintf(os.Stderr, "Skipping home page regeneration (LLM advised no change needed)\n")
+		} else {
+			fmt.Println("Skipping project overview (no change needed)")
 		}
 
 		// Architecture overview for Normal and Max tiers.
 		if cfg.Quality != config.QualityLite && shouldRegenArch {
-			if verbose {
-				fmt.Fprintf(os.Stderr, "Regenerating architecture overview...\n")
-			}
+			fmt.Println("Regenerating architecture overview...")
 			if err := docGen.GenerateArchitecture(ctx, allDocs, llmProvider, cfg.Model); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: architecture regeneration failed: %v\n", err)
 			}
-		} else if cfg.Quality != config.QualityLite && verbose {
-			fmt.Fprintf(os.Stderr, "Skipping architecture regeneration (LLM advised no change needed)\n")
+		} else if cfg.Quality != config.QualityLite {
+			fmt.Println("Skipping architecture overview (no change needed)")
 		}
 	}
 
