@@ -16,6 +16,7 @@ type Server struct {
 	embedder embeddings.Embedder
 	docsDir  string
 	mcp      *server.MCPServer
+	phase4   *Phase4Deps
 }
 
 // NewServer creates a new MCP server with the given dependencies.
