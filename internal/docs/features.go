@@ -420,22 +420,86 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 	return data
 }
 
-// sanitizeMermaid quotes node labels that contain characters Mermaid treats as
-// special syntax (parentheses, braces, etc.) to prevent parse errors.
-var mermaidNodeLabel = regexp.MustCompile(`(\b\w+)\[([^\]"]+)\]`)
-
+// sanitizeMermaid fixes common syntax issues in LLM-generated Mermaid diagrams.
+// It sanitizes node IDs (removing &, #, etc.) and quotes labels containing
+// special characters.
 func sanitizeMermaid(diagram string) string {
-	return mermaidNodeLabel.ReplaceAllStringFunc(diagram, func(match string) string {
-		m := mermaidNodeLabel.FindStringSubmatch(match)
-		if len(m) < 3 {
-			return match
-		}
-		label := m[2]
-		if strings.ContainsAny(label, "(){}|<>") {
-			return m[1] + `["` + label + `"]`
-		}
-		return match
-	})
+	var out strings.Builder
+	for _, line := range strings.Split(diagram, "\n") {
+		out.WriteString(sanitizeMermaidLine(line))
+		out.WriteString("\n")
+	}
+	return strings.TrimRight(out.String(), "\n")
+}
+
+// mermaidNodeDef matches a node definition: ID["label"] or ID[label]
+var mermaidNodeDef = regexp.MustCompile(`^(\s*)(\S+?)(\[.*)$`)
+
+// mermaidArrow matches an arrow line: ID --> ID or ID -->|label| ID
+var mermaidArrow = regexp.MustCompile(`^(\s*)(\S+?)(\s*-->.*)$`)
+
+// mermaidArrowTarget matches the target node ID in an arrow (after --> or -->|...|)
+var mermaidArrowTarget = regexp.MustCompile(`(-->(?:\|[^|]*\|)?\s*)(\S+)(.*)$`)
+
+// sanitizeMermaidID replaces characters that are invalid in Mermaid node IDs.
+func sanitizeMermaidID(id string) string {
+	replacer := strings.NewReplacer(
+		"&", "_",
+		"#", "_",
+		"@", "_",
+		"!", "_",
+		"?", "_",
+		"(", "_",
+		")", "_",
+		"[", "_",
+		"]", "_",
+		"{", "_",
+		"}", "_",
+		"<", "_",
+		">", "_",
+		";", "_",
+		",", "_",
+		"'", "_",
+		"\"", "_",
+	)
+	return replacer.Replace(id)
+}
+
+func sanitizeMermaidLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+
+	// Skip directives, subgraph, end, empty lines, comments.
+	if trimmed == "" || strings.HasPrefix(trimmed, "graph ") ||
+		strings.HasPrefix(trimmed, "%%") || trimmed == "end" ||
+		strings.HasPrefix(trimmed, "subgraph ") ||
+		strings.HasPrefix(trimmed, "flowchart ") ||
+		strings.HasPrefix(trimmed, "classDef ") ||
+		strings.HasPrefix(trimmed, "class ") ||
+		strings.HasPrefix(trimmed, "style ") {
+		return line
+	}
+
+	// Node definition: ID[label] or ID["label"]
+	if m := mermaidNodeDef.FindStringSubmatch(line); m != nil {
+		indent, id, rest := m[1], m[2], m[3]
+		return indent + sanitizeMermaidID(id) + rest
+	}
+
+	// Arrow line: ID --> ID  or  ID -->|label| ID
+	if m := mermaidArrow.FindStringSubmatch(line); m != nil {
+		indent, sourceID, rest := m[1], m[2], m[3]
+		// Also sanitize the target ID.
+		rest = mermaidArrowTarget.ReplaceAllStringFunc(rest, func(s string) string {
+			tm := mermaidArrowTarget.FindStringSubmatch(s)
+			if tm == nil {
+				return s
+			}
+			return tm[1] + sanitizeMermaidID(tm[2]) + tm[3]
+		})
+		return indent + sanitizeMermaidID(sourceID) + rest
+	}
+
+	return line
 }
 
 // generateFeatureDetails makes concurrent LLM calls to produce a detailed
