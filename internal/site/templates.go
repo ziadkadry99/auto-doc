@@ -173,8 +173,8 @@ body {
 }
 
 .sidebar-logo {
-  max-width: 64px;
-  max-height: 64px;
+  max-width: 100px;
+  max-height: 100px;
   border-radius: 8px;
 }
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" width="120" alt="autodoc logo"/>
+  <img src="assets/logo.png" width="200" alt="autodoc logo"/>
 </p>
 
 <h1 align="center">autodoc</h1>
