@@ -6,7 +6,7 @@
 # and synthesis quality across 10 graded questions.
 #
 # Prerequisites:
-#   - ANTHROPIC_API_KEY and GOOGLE_API_KEY set (or GEMINI_API_KEY)
+#   - GOOGLE_API_KEY (or GEMINI_API_KEY) set
 #   - go, git, curl on PATH
 #
 # Usage:
@@ -189,15 +189,7 @@ preflight() {
 
   local ok=true
 
-  # Required env vars.
-  if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-    log_err "ANTHROPIC_API_KEY is not set"
-    ok=false
-  else
-    log_ok "ANTHROPIC_API_KEY is set"
-  fi
-
-  # Accept GOOGLE_API_KEY or GEMINI_API_KEY (they are the same key).
+  # Required env vars — accept GOOGLE_API_KEY or GEMINI_API_KEY.
   if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
     if [[ -n "${GEMINI_API_KEY:-}" ]]; then
       export GOOGLE_API_KEY="$GEMINI_API_KEY"
@@ -285,8 +277,8 @@ write_config() {
   log_phase 4 "Write Config"
 
   cat > "$REPO_DIR/repo/.autodoc.yml" <<'YAML'
-provider: anthropic
-model: claude-sonnet-4-5-20250929
+provider: google
+model: gemini-3-pro-preview
 embedding_provider: google
 embedding_model: gemini-embedding-001
 quality: normal
