@@ -97,6 +97,10 @@ const architectureTemplate = `# Architecture Overview
 
 {{ .Overview }}
 
+{{ if .Languages }}## Languages and Services
+
+{{ .Languages }}
+{{ end }}
 {{ if .Components }}## Components
 {{ range .Components }}
 ### {{ .Name }}
@@ -104,6 +108,10 @@ const architectureTemplate = `# Architecture Overview
 {{ .Description }}
 {{ end }}
 {{- end }}
+{{ if .ServiceDependencies }}## Service Dependencies
+
+{{ .ServiceDependencies }}
+{{ end }}
 {{ if .EntryPoints }}## Entry Points
 
 | Name | Type | Description |

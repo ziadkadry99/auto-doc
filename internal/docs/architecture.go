@@ -15,14 +15,16 @@ import (
 
 // archData holds the data passed to the architecture markdown template.
 type archData struct {
-	Overview       string
-	Components     []diagrams.Component
-	EntryPoints    []EntryPoint
-	ExitPoints     []ExitPoint
-	DataFlow       string
-	DesignPatterns []string
-	ArchDiagram    string
-	DepDiagram     string
+	Overview            string
+	Languages           string
+	Components          []diagrams.Component
+	ServiceDependencies string
+	EntryPoints         []EntryPoint
+	ExitPoints          []ExitPoint
+	DataFlow            string
+	DesignPatterns      []string
+	ArchDiagram         string
+	DepDiagram          string
 }
 
 // GenerateArchitecture creates an architecture overview document by aggregating
@@ -32,21 +34,44 @@ func (g *DocGenerator) GenerateArchitecture(ctx context.Context, analyses []inde
 	// Build a compact representation of all files for the LLM.
 	var summary strings.Builder
 	for _, a := range analyses {
-		fmt.Fprintf(&summary, "- %s: %s\n", a.FilePath, a.Summary)
+		fmt.Fprintf(&summary, "- %s [%s]: %s\n", a.FilePath, a.Language, a.Summary)
+	}
+
+	// Collect inter-service dependencies for the prompt.
+	var depSummary strings.Builder
+	for _, a := range analyses {
+		for _, d := range a.Dependencies {
+			if d.Type == "api_call" || d.Type == "grpc" || d.Type == "database" || d.Type == "event" {
+				fmt.Fprintf(&depSummary, "- %s depends on %s (%s)\n", a.FilePath, d.Name, d.Type)
+			}
+		}
 	}
 
 	prompt := fmt.Sprintf(`Given the following source files and their summaries, describe the overall architecture of this project.
 
-Files:
+Files (with language in brackets):
+%s
+
+Inter-service dependencies:
 %s
 
 Please respond with the following sections separated by the markers shown:
 
 ===OVERVIEW===
-A 2-4 paragraph overview of the architecture.
+A 2-4 paragraph overview of the architecture. Mention ALL programming languages used and how many services/components exist.
+
+===LANGUAGES===
+List each service/component and its primary programming language, one per line:
+ServiceName: Language (port if known)
+Example: Frontend: Go (port 8080)
 
 ===COMPONENTS===
 List each major component, one per line, in the format: ComponentName: Description
+
+===SERVICE_DEPENDENCIES===
+List which services call which other services, one per line:
+ServiceA -> ServiceB: protocol (reason)
+Example: Frontend -> ProductCatalogService: gRPC (fetch product listings)
 
 ===ENTRY_POINTS===
 List every way a user or external system can interact with this project (CLI commands, API endpoints, MCP tools, event handlers, etc.).
@@ -54,6 +79,7 @@ Each entry as:
 ENTRY: Name of the entry point
 TYPE: Category (e.g. CLI Command, API Endpoint, MCP Tool, Event Handler)
 DESCRIPTION: What it does
+Include specific port numbers and route paths when known.
 
 ===EXIT_POINTS===
 List every output or side effect this project produces (files written, API calls made, databases updated, messages sent, etc.).
@@ -63,18 +89,18 @@ TYPE: Category (e.g. File Output, API Call, Database Write, Network Request)
 DESCRIPTION: What it produces
 
 ===DATAFLOW===
-Describe how data flows through the system in 1-2 paragraphs.
+Describe how data flows through the system in 2-3 paragraphs. Include specific service names and protocols.
 
 ===PATTERNS===
-List design patterns used, one per line.`, summary.String())
+List design patterns used, one per line.`, summary.String(), depSummary.String())
 
 	resp, err := provider.Complete(ctx, llm.CompletionRequest{
 		Model: model,
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: "You are a software architect analyzing a codebase. Be concise and factual."},
+			{Role: llm.RoleSystem, Content: "You are a software architect analyzing a codebase. Be concise and factual. Always include concrete details like port numbers, specific languages per service, and exact protocol names."},
 			{Role: llm.RoleUser, Content: prompt},
 		},
-		MaxTokens:   2048,
+		MaxTokens:   4096,
 		Temperature: 0.3,
 	})
 	if err != nil {
@@ -137,7 +163,9 @@ func parseArchResponse(content string) archData {
 	// All section markers used in the architecture response.
 	allArchMarkers := []string{
 		"===OVERVIEW===",
+		"===LANGUAGES===",
 		"===COMPONENTS===",
+		"===SERVICE_DEPENDENCIES===",
 		"===ENTRY_POINTS===",
 		"===EXIT_POINTS===",
 		"===DATAFLOW===",
@@ -160,8 +188,10 @@ func parseArchResponse(content string) archData {
 
 	// Extract simple text sections.
 	sections := map[string]*string{
-		"===OVERVIEW===": &data.Overview,
-		"===DATAFLOW===": &data.DataFlow,
+		"===OVERVIEW===":              &data.Overview,
+		"===LANGUAGES===":             &data.Languages,
+		"===SERVICE_DEPENDENCIES===":  &data.ServiceDependencies,
+		"===DATAFLOW===":              &data.DataFlow,
 	}
 	for marker, field := range sections {
 		if idx := strings.Index(content, marker); idx >= 0 {

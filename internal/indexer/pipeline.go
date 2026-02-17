@@ -253,36 +253,58 @@ func buildReverseDependencyDocs(analyses map[string]FileAnalysis) []vectordb.Doc
 }
 
 // isServiceLevelDep returns true if the dependency represents a service-level
-// interaction (API call, database, event, gRPC service) rather than a
-// package-level library import.
+// interaction (gRPC service, database, event bus, infrastructure) rather than
+// a package import, shell command, template variable, or build tool.
 func isServiceLevelDep(dep Dependency) bool {
-	// Always include non-import deps (api_call, database, event, grpc).
-	if dep.Type != "import" {
-		return true
-	}
-
 	name := dep.Name
+	nameLower := strings.ToLower(name)
 
-	// Include if name contains "Service" (gRPC service reference).
-	if strings.Contains(name, "Service") {
+	// Type-based: always include database, event, and grpc deps.
+	switch dep.Type {
+	case "database", "event", "grpc":
 		return true
 	}
 
-	// Include if it looks like an internal project path (contains src/ or /).
-	if strings.Contains(name, "/") && !isCommonPackagePrefix(name) {
+	// Name-based: include if name contains "service" (case-insensitive)
+	// as this indicates a real microservice dependency.
+	if strings.Contains(nameLower, "service") {
+		// Exclude external packages that happen to contain "service".
+		if isCommonPackagePrefix(name) {
+			return false
+		}
 		return true
 	}
 
-	// Exclude bare package names (npm, pip, NuGet, Go stdlib, etc.).
+	// Name-based: include if name refers to known infrastructure.
+	infraKeywords := []string{
+		"redis", "kafka", "rabbitmq", "postgres", "mysql",
+		"mongodb", "elasticsearch", "memcache", "dynamodb",
+	}
+	for _, kw := range infraKeywords {
+		if strings.Contains(nameLower, kw) {
+			return true
+		}
+	}
+
+	// Everything else (shell commands, template vars, libraries, tools,
+	// filesystem refs) is NOT service-level.
 	return false
 }
 
-// isCommonPackagePrefix returns true if the path looks like an external package.
+// isCommonPackagePrefix returns true if the path looks like an external package
+// or Go standard library import.
 func isCommonPackagePrefix(name string) bool {
 	prefixes := []string{
+		// Go external packages.
 		"github.com/", "golang.org/", "google.golang.org/",
 		"go.opentelemetry.io/", "cloud.google.com/",
+		// Go standard library common packages.
+		"net/", "os/", "io/", "encoding/", "fmt/", "strings/",
+		"crypto/", "sync/", "context/", "math/", "sort/",
+		"path/", "log/", "testing/", "bufio/", "bytes/",
+		// Node.js / npm packages.
 		"@google-cloud/", "@grpc/", "@opentelemetry/",
+		// .NET packages.
 		"Microsoft.", "System.", "Npgsql.",
 	}
 	for _, p := range prefixes {

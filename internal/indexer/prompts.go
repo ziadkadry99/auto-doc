@@ -12,10 +12,12 @@ const systemPrompt = `You are a senior software engineer performing a code revie
 const litePromptTemplate = `Analyze this %s file and return a JSON object with exactly these fields:
 
 {
-  "summary": "2-3 sentence summary of what this file does",
+  "summary": "2-3 sentence summary of what this file does. Include concrete values like port numbers, routes, and service names.",
   "purpose": "One sentence describing the file's role in the project",
-  "dependencies": [{"name": "package or service name", "type": "import|api_call|database|event"}]
+  "dependencies": [{"name": "package or service name", "type": "import|api_call|grpc|database|event"}]
 }
+
+Do NOT list shell commands (ls, cd, mkdir, cp) as dependencies.
 
 File path: %s
 
@@ -24,13 +26,13 @@ File path: %s
 const normalPromptTemplate = `Analyze this %s file and return a JSON object with exactly these fields:
 
 {
-  "summary": "2-3 sentence summary of what this file does",
+  "summary": "2-3 sentence summary of what this file does. IMPORTANT: Include specific concrete values found in the code such as port numbers (e.g. 'listens on port 8080'), HTTP routes (e.g. 'exposes /cart, /checkout'), environment variable names (e.g. 'reads REDIS_ADDR'), gRPC service names, and database connection details.",
   "purpose": "One sentence describing the file's role in the project",
   "functions": [
     {
       "name": "function name",
       "signature": "full function signature",
-      "summary": "What this function does",
+      "summary": "What this function does. Include specific values: ports, routes, env vars, service addresses.",
       "parameters": [{"name": "param", "type": "type", "description": "what it is"}],
       "returns": "return type and meaning",
       "line_start": 0,
@@ -47,9 +49,16 @@ const normalPromptTemplate = `Analyze this %s file and return a JSON object with
       "line_end": 0
     }
   ],
-  "dependencies": [{"name": "package or service name", "type": "import|api_call|database|event"}],
-  "key_logic": ["Description of important algorithm or business logic"]
+  "dependencies": [{"name": "package or service name", "type": "import|api_call|grpc|database|event"}],
+  "key_logic": ["Description of important algorithm or business logic. Include specific values: validation rules, port numbers, route paths, config keys."]
 }
+
+IMPORTANT for dependencies:
+- Use type "grpc" for gRPC service calls (e.g. ProductCatalogService, CurrencyService)
+- Use type "api_call" for HTTP/REST API calls to other services
+- Use type "database" for database connections (Redis, PostgreSQL, etc.)
+- Use type "import" for library/package imports
+- Do NOT list shell commands (ls, cd, mkdir, cp, echo) as dependencies
 
 Omit empty arrays. Set line numbers to 0 if unknown.
 
@@ -60,13 +69,13 @@ File path: %s
 const maxPromptTemplate = `Perform a thorough analysis of this %s file and return a JSON object with exactly these fields:
 
 {
-  "summary": "Detailed 3-5 sentence summary of what this file does",
+  "summary": "Detailed 3-5 sentence summary of what this file does. IMPORTANT: Include specific concrete values found in the code such as port numbers, HTTP routes, environment variable names, gRPC service names, and database connection details.",
   "purpose": "Detailed description of the file's role, responsibilities, and how it fits in the project",
   "functions": [
     {
       "name": "function name",
       "signature": "full function signature",
-      "summary": "Detailed description including edge cases and error handling",
+      "summary": "Detailed description including edge cases and error handling. Include specific values: ports, routes, env vars.",
       "parameters": [{"name": "param", "type": "type", "description": "detailed description"}],
       "returns": "return type, meaning, and possible error conditions",
       "line_start": 0,
@@ -83,11 +92,18 @@ const maxPromptTemplate = `Perform a thorough analysis of this %s file and retur
       "line_end": 0
     }
   ],
-  "dependencies": [{"name": "package or service name", "type": "import|api_call|database|event"}],
+  "dependencies": [{"name": "package or service name", "type": "import|api_call|grpc|database|event"}],
   "key_logic": [
-    "Detailed description of each important algorithm, business rule, error handling pattern, or cross-reference to other modules"
+    "Detailed description of each important algorithm, business rule, error handling pattern, or cross-reference to other modules. Include concrete values: validation rules, port numbers, route paths, config keys."
   ]
 }
+
+IMPORTANT for dependencies:
+- Use type "grpc" for gRPC service calls (e.g. ProductCatalogService, CurrencyService)
+- Use type "api_call" for HTTP/REST API calls to other services
+- Use type "database" for database connections (Redis, PostgreSQL, etc.)
+- Use type "import" for library/package imports
+- Do NOT list shell commands (ls, cd, mkdir, cp, echo) as dependencies
 
 Include all functions, methods, types, and significant constants. Document error handling patterns and edge cases. Note any cross-references to other files or modules. Omit empty arrays. Set line numbers to 0 if unknown.
 
