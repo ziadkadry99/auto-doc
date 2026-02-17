@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -44,6 +45,11 @@ func (b *Batcher) ProcessFiles(ctx context.Context, files []walker.FileInfo) *Ba
 		return &BatchResult{}
 	}
 
+	// Circuit breaker: cancel remaining work if quota is exhausted.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var quotaExhausted int64
+
 	sem := make(chan struct{}, b.concurrency)
 	var mu sync.Mutex
 	var processed int64
@@ -51,6 +57,18 @@ func (b *Batcher) ProcessFiles(ctx context.Context, files []walker.FileInfo) *Ba
 
 	var wg sync.WaitGroup
 	for _, file := range files {
+		// Check circuit breaker before starting new work.
+		if atomic.LoadInt64(&quotaExhausted) > 0 {
+			mu.Lock()
+			result.Errors = append(result.Errors, fmt.Errorf("analyze %s: skipped (API quota exhausted)", file.RelPath))
+			mu.Unlock()
+			count := atomic.AddInt64(&processed, 1)
+			if b.onProgress != nil {
+				b.onProgress(int(count), total, file.RelPath)
+			}
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
 			mu.Lock()
@@ -81,6 +99,12 @@ func (b *Batcher) ProcessFiles(ctx context.Context, files []walker.FileInfo) *Ba
 			mu.Lock()
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Errorf("analyze %s: %w", f.RelPath, err))
+				// Detect quota exhaustion and trip circuit breaker.
+				errStr := err.Error()
+				if strings.Contains(errStr, "RESOURCE_EXHAUSTED") || strings.Contains(errStr, "quota") {
+					atomic.StoreInt64(&quotaExhausted, 1)
+					cancel()
+				}
 			} else {
 				result.Results = append(result.Results, *ar)
 				result.InputTokens += ar.InputTokens

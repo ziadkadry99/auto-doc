@@ -335,7 +335,7 @@ write_config() {
 
   cat > "$REPO_DIR/repo/.autodoc.yml" <<'YAML'
 provider: google
-model: gemini-3-pro-preview
+model: gemini-2.5-flash
 embedding_provider: google
 embedding_model: gemini-embedding-001
 quality: normal

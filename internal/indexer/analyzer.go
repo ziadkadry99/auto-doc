@@ -80,7 +80,7 @@ func (a *FileAnalyzer) Analyze(ctx context.Context, filePath string, content []b
 	resp, err := a.completeWithRetry(ctx, llm.CompletionRequest{
 		Model:       a.model,
 		Messages:    messages,
-		MaxTokens:   8192,
+		MaxTokens:   4096,
 		Temperature: 0.1,
 		JSONMode:    true,
 	})
@@ -93,7 +93,7 @@ func (a *FileAnalyzer) Analyze(ctx context.Context, filePath string, content []b
 		retryResp, retryErr := a.completeWithRetry(ctx, llm.CompletionRequest{
 			Model:       a.model,
 			Messages:    messages,
-			MaxTokens:   16384,
+			MaxTokens:   8192,
 			Temperature: 0.1,
 			JSONMode:    true,
 		})

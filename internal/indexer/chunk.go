@@ -45,27 +45,37 @@ func ChunkAnalysis(analysis *FileAnalysis, tier config.QualityTier) []vectordb.D
 		},
 	})
 
-	// Dependency document: lists what this file depends on for blast-radius queries.
+	// Dependency document: lists service-level dependencies for blast-radius queries.
+	// Only created when the file has meaningful service-level deps (gRPC, API calls, etc.),
+	// not for trivial imports or shell commands.
 	if len(analysis.Dependencies) > 0 {
-		var depParts []string
-		depParts = append(depParts, fmt.Sprintf("File: %s", analysis.FilePath))
-		depParts = append(depParts, fmt.Sprintf("Language: %s", analysis.Language))
-		depParts = append(depParts, "Dependencies and blast radius:")
+		var serviceDeps []Dependency
 		for _, d := range analysis.Dependencies {
-			depParts = append(depParts, fmt.Sprintf("- Depends on %s (%s). Changes to %s may affect %s.", d.Name, d.Type, d.Name, analysis.FilePath))
+			if isServiceLevelDep(d) {
+				serviceDeps = append(serviceDeps, d)
+			}
 		}
-		docs = append(docs, vectordb.Document{
-			ID:      fmt.Sprintf("deps:%s", analysis.FilePath),
-			Content: strings.Join(depParts, "\n"),
-			Metadata: vectordb.DocumentMetadata{
-				FilePath:    analysis.FilePath,
-				ContentHash: analysis.ContentHash,
-				Type:        vectordb.DocTypeFile,
-				Language:    analysis.Language,
-				Symbol:      "dependencies",
-				LastUpdated: now,
-			},
-		})
+		if len(serviceDeps) > 0 {
+			var depParts []string
+			depParts = append(depParts, fmt.Sprintf("File: %s", analysis.FilePath))
+			depParts = append(depParts, fmt.Sprintf("Language: %s", analysis.Language))
+			depParts = append(depParts, "Service dependencies and blast radius:")
+			for _, d := range serviceDeps {
+				depParts = append(depParts, fmt.Sprintf("- Depends on %s (%s). Changes to %s may affect %s.", d.Name, d.Type, d.Name, analysis.FilePath))
+			}
+			docs = append(docs, vectordb.Document{
+				ID:      fmt.Sprintf("deps:%s", analysis.FilePath),
+				Content: strings.Join(depParts, "\n"),
+				Metadata: vectordb.DocumentMetadata{
+					FilePath:    analysis.FilePath,
+					ContentHash: analysis.ContentHash,
+					Type:        vectordb.DocTypeFile,
+					Language:    analysis.Language,
+					Symbol:      "dependencies",
+					LastUpdated: now,
+				},
+			})
+		}
 	}
 
 	// Function-level documents (Normal and Max tiers).
