@@ -47,6 +47,14 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'  # No Color
 
+# Detect python binary (python3 or python, whichever is available).
+PYTHON_BIN=""
+if command -v python3 &>/dev/null; then
+  PYTHON_BIN="python3"
+elif command -v python &>/dev/null; then
+  PYTHON_BIN="python"
+fi
+
 # ─────────────────────────────────────────────────────────────────────
 # CLI flags
 # ─────────────────────────────────────────────────────────────────────
@@ -165,6 +173,48 @@ run_with_timeout() {
   timeout "$timeout_secs" "$@" 2>&1
 }
 
+# Escape a string for safe JSON embedding (no python needed).
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"   # backslash
+  s="${s//\"/\\\"}"   # double quote
+  s="${s//$'\n'/\\n}" # newline
+  s="${s//$'\r'/\\r}" # carriage return
+  s="${s//$'\t'/\\t}" # tab
+  printf '%s' "$s"
+}
+
+# Count JSON array length using grep (fallback when python is unavailable).
+json_array_len() {
+  local file="$1"
+  if [[ -n "$PYTHON_BIN" ]]; then
+    "$PYTHON_BIN" -c "import json,sys; print(len(json.load(sys.stdin)))" < "$file" 2>/dev/null || echo "?"
+  else
+    # Rough count: number of top-level objects.
+    grep -c '"file_path"' "$file" 2>/dev/null || echo "?"
+  fi
+}
+
+# Check if JSON has an "answer" field.
+json_has_answer() {
+  local file="$1"
+  if [[ -n "$PYTHON_BIN" ]]; then
+    "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print('yes' if d.get('answer') else 'no')" < "$file" 2>/dev/null || echo "?"
+  else
+    if grep -q '"answer"' "$file" 2>/dev/null; then echo "yes"; else echo "no"; fi
+  fi
+}
+
+# Count results in API JSON response.
+json_result_count() {
+  local file="$1"
+  if [[ -n "$PYTHON_BIN" ]]; then
+    "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('results',[])))" < "$file" 2>/dev/null || echo "?"
+  else
+    grep -c '"file_path"' "$file" 2>/dev/null || echo "?"
+  fi
+}
+
 # Wait for the site server to become ready.
 wait_for_server() {
   local port=$1
@@ -200,6 +250,13 @@ preflight() {
     fi
   else
     log_ok "GOOGLE_API_KEY is set"
+  fi
+
+  # Python availability (optional — used for nicer result parsing).
+  if [[ -n "$PYTHON_BIN" ]]; then
+    log_ok "Python found: $PYTHON_BIN"
+  else
+    log_warn "Python not found — using fallback JSON parsing (some stats will show '?')"
   fi
 
   # Required tools.
@@ -456,7 +513,7 @@ run_cli_queries() {
     if (cd "$REPO_DIR/repo" && run_with_timeout "$QUERY_TIMEOUT" \
         "$AUTODOC_BIN" query "$question" --json --limit 10) > "$outfile" 2>&1; then
       local count
-      count=$(python3 -c "import json,sys; print(len(json.load(sys.stdin)))" < "$outfile" 2>/dev/null || echo "?")
+      count=$(json_array_len "$outfile")
       log_ok "  -> $count results saved to q${i}.json"
     else
       log_warn "  -> Query failed or timed out (saved partial output)"
@@ -507,8 +564,10 @@ run_api_queries() {
 
     log_info "Q${i} [${DIFFICULTIES[$i]}]: $question"
 
+    local escaped_q
+    escaped_q=$(json_escape "$question")
     local payload
-    payload=$(printf '{"query": %s, "limit": 10}' "$(echo "$question" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')")
+    payload=$(printf '{"query": "%s", "limit": 10}' "$escaped_q")
 
     if run_with_timeout "$QUERY_TIMEOUT" \
         curl -s -X POST "http://localhost:$SITE_PORT/api/search" \
@@ -516,9 +575,9 @@ run_api_queries() {
           -d "$payload" > "$outfile" 2>&1; then
       # Check if response has an answer field.
       local has_answer
-      has_answer=$(python3 -c "import json,sys; d=json.load(sys.stdin); print('yes' if d.get('answer') else 'no')" < "$outfile" 2>/dev/null || echo "?")
+      has_answer=$(json_has_answer "$outfile")
       local result_count
-      result_count=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('results',[])))" < "$outfile" 2>/dev/null || echo "?")
+      result_count=$(json_result_count "$outfile")
       log_ok "  -> ${result_count} results, LLM answer: ${has_answer}"
     else
       log_warn "  -> API query failed or timed out"
@@ -640,7 +699,8 @@ EOF
     local api_file="$RESULTS_DIR/api/q${i}.json"
     if [[ -f "$api_file" ]]; then
       local answer
-      answer=$(python3 -c "
+      if [[ -n "$PYTHON_BIN" ]]; then
+        answer=$("$PYTHON_BIN" -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -648,6 +708,13 @@ try:
 except:
     print('(failed to parse response)')
 " < "$api_file" 2>/dev/null || echo "(error reading file)")
+      else
+        # Extract answer field with grep/sed fallback.
+        answer=$(grep -o '"answer":"[^"]*"' "$api_file" 2>/dev/null | head -1 | sed 's/"answer":"//;s/"$//' || echo "(no LLM answer returned)")
+        if [[ -z "$answer" ]]; then
+          answer="(no LLM answer returned)"
+        fi
+      fi
 
       cat >> "$REPORT_FILE" <<EOF
 **LLM Answer:**

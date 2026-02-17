@@ -206,11 +206,17 @@ func (p *Pipeline) DryRun(ctx context.Context, files []walker.FileInfo) (*CostEs
 
 // buildReverseDependencyDocs creates documents for dependencies that are used by 2+ files.
 // This enables "what depends on X" / blast-radius queries.
+// Only service-level dependencies are indexed (api_call, database, event, and
+// imports that look like internal services), not package-level library imports.
 func buildReverseDependencyDocs(analyses map[string]FileAnalysis) []vectordb.Document {
 	// Build reverse map: dependency name → list of files that depend on it.
+	// Only include service-level dependencies, not package-level libraries.
 	reverseMap := make(map[string][]string)
 	for _, analysis := range analyses {
 		for _, dep := range analysis.Dependencies {
+			if !isServiceLevelDep(dep) {
+				continue
+			}
 			reverseMap[dep.Name] = append(reverseMap[dep.Name], analysis.FilePath)
 		}
 	}
@@ -244,4 +250,45 @@ func buildReverseDependencyDocs(analyses map[string]FileAnalysis) []vectordb.Doc
 	}
 
 	return docs
+}
+
+// isServiceLevelDep returns true if the dependency represents a service-level
+// interaction (API call, database, event, gRPC service) rather than a
+// package-level library import.
+func isServiceLevelDep(dep Dependency) bool {
+	// Always include non-import deps (api_call, database, event, grpc).
+	if dep.Type != "import" {
+		return true
+	}
+
+	name := dep.Name
+
+	// Include if name contains "Service" (gRPC service reference).
+	if strings.Contains(name, "Service") {
+		return true
+	}
+
+	// Include if it looks like an internal project path (contains src/ or /).
+	if strings.Contains(name, "/") && !isCommonPackagePrefix(name) {
+		return true
+	}
+
+	// Exclude bare package names (npm, pip, NuGet, Go stdlib, etc.).
+	return false
+}
+
+// isCommonPackagePrefix returns true if the path looks like an external package.
+func isCommonPackagePrefix(name string) bool {
+	prefixes := []string{
+		"github.com/", "golang.org/", "google.golang.org/",
+		"go.opentelemetry.io/", "cloud.google.com/",
+		"@google-cloud/", "@grpc/", "@opentelemetry/",
+		"Microsoft.", "System.", "Npgsql.",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }

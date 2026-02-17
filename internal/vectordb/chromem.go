@@ -61,8 +61,8 @@ func (s *ChromemStore) Search(ctx context.Context, query string, limit int, filt
 		limit = 10
 	}
 
-	// Fetch extra results for deduplication.
-	fetchLimit := limit * 2
+	// Fetch extra results for deduplication (file path + content hash).
+	fetchLimit := limit * 3
 	count := s.collection.Count()
 	if count == 0 {
 		return nil, nil
@@ -78,18 +78,32 @@ func (s *ChromemStore) Search(ctx context.Context, query string, limit int, filt
 		return nil, fmt.Errorf("chromem query: %w", err)
 	}
 
-	// Deduplicate: max 2 results per file path.
+	// Deduplicate: max 2 results per file path AND per content hash.
+	// Content hash dedup merges identical files in different directories
+	// (e.g., proto files copied across service directories).
 	const maxPerFile = 2
+	const maxPerHash = 2
 	fileCount := make(map[string]int)
+	hashCount := make(map[string]int)
 	var searchResults []SearchResult
 
 	for _, r := range results {
 		meta := mapToMetadata(r.Metadata)
 		fp := meta.FilePath
+		ch := meta.ContentHash
+
 		if fileCount[fp] >= maxPerFile {
 			continue
 		}
+		// Skip if we already have enough results with the same content.
+		if ch != "" && hashCount[ch] >= maxPerHash {
+			continue
+		}
+
 		fileCount[fp]++
+		if ch != "" {
+			hashCount[ch]++
+		}
 		searchResults = append(searchResults, SearchResult{
 			Document: Document{
 				ID:       r.ID,

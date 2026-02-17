@@ -80,7 +80,7 @@ func (a *FileAnalyzer) Analyze(ctx context.Context, filePath string, content []b
 	resp, err := a.completeWithRetry(ctx, llm.CompletionRequest{
 		Model:       a.model,
 		Messages:    messages,
-		MaxTokens:   4096,
+		MaxTokens:   8192,
 		Temperature: 0.1,
 		JSONMode:    true,
 	})
@@ -88,12 +88,12 @@ func (a *FileAnalyzer) Analyze(ctx context.Context, filePath string, content []b
 		return nil, fmt.Errorf("llm completion: %w", err)
 	}
 
-	// If the response was truncated by token limit, retry with higher MaxTokens.
+	// If the response was truncated by token limit, retry with even higher MaxTokens.
 	if resp.FinishReason == "MAX_TOKENS" || resp.FinishReason == "length" {
 		retryResp, retryErr := a.completeWithRetry(ctx, llm.CompletionRequest{
 			Model:       a.model,
 			Messages:    messages,
-			MaxTokens:   8192,
+			MaxTokens:   16384,
 			Temperature: 0.1,
 			JSONMode:    true,
 		})
