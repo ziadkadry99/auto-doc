@@ -133,14 +133,18 @@ List design patterns used, one per line.`, summary.String(), depSummary.String()
 		data.DepDiagram = diagrams.DependencyDiagram(depMap)
 	}
 
-	// Build architecture diagram from parsed components.
+	// Build architecture diagram from parsed components and service dependencies.
 	if len(data.Components) > 1 {
-		var rels []diagrams.Relationship
-		for i := 0; i < len(data.Components)-1; i++ {
-			rels = append(rels, diagrams.Relationship{
-				From: data.Components[i].Name,
-				To:   data.Components[i+1].Name,
-			})
+		rels := parseServiceDependencies(data.ServiceDependencies, data.Components)
+		// Fallback: if no relationships were parsed, create minimal links
+		// based on adjacency so the diagram isn't disconnected.
+		if len(rels) == 0 {
+			for i := 0; i < len(data.Components)-1; i++ {
+				rels = append(rels, diagrams.Relationship{
+					From: data.Components[i].Name,
+					To:   data.Components[i+1].Name,
+				})
+			}
 		}
 		data.ArchDiagram = diagrams.ArchitectureDiagram(data.Components, rels)
 	}
@@ -310,4 +314,67 @@ func parseArchResponse(content string) archData {
 	}
 
 	return data
+}
+
+// parseServiceDependencies extracts relationships from the SERVICE_DEPENDENCIES
+// section text. Expected format: "ServiceA -> ServiceB: protocol (reason)"
+// It fuzzy-matches service names against the parsed component list.
+func parseServiceDependencies(depsText string, components []diagrams.Component) []diagrams.Relationship {
+	if depsText == "" {
+		return nil
+	}
+
+	// Build a lookup: lowercased component name → canonical name.
+	compNames := make(map[string]string)
+	for _, c := range components {
+		compNames[strings.ToLower(c.Name)] = c.Name
+	}
+
+	// Fuzzy match a name against known components.
+	matchComponent := func(name string) string {
+		name = strings.TrimSpace(name)
+		lower := strings.ToLower(name)
+		// Exact match.
+		if canonical, ok := compNames[lower]; ok {
+			return canonical
+		}
+		// Substring containment.
+		for key, canonical := range compNames {
+			if strings.Contains(lower, key) || strings.Contains(key, lower) {
+				return canonical
+			}
+		}
+		return ""
+	}
+
+	seen := make(map[string]bool)
+	var rels []diagrams.Relationship
+	for _, line := range strings.Split(depsText, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "- ")
+		line = strings.TrimPrefix(line, "* ")
+		// Look for "A -> B" pattern.
+		arrowIdx := strings.Index(line, "->")
+		if arrowIdx < 0 {
+			continue
+		}
+		from := line[:arrowIdx]
+		rest := line[arrowIdx+2:]
+		// Strip label after colon: "B: protocol (reason)" → "B"
+		if colonIdx := strings.Index(rest, ":"); colonIdx >= 0 {
+			rest = rest[:colonIdx]
+		}
+		fromComp := matchComponent(from)
+		toComp := matchComponent(rest)
+		if fromComp == "" || toComp == "" || fromComp == toComp {
+			continue
+		}
+		key := fromComp + "|" + toComp
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		rels = append(rels, diagrams.Relationship{From: fromComp, To: toComp})
+	}
+	return rels
 }

@@ -122,8 +122,12 @@ DESCRIPTION: What happens when you run this and what to expect
 
 ===ARCHITECTURE_DIAGRAM===
 A Mermaid "graph TD" diagram showing the high-level architecture.
-Show layers (e.g. API, Core, Storage, Tools) and key components within each.
-Use subgraph blocks for layers. Show real data-flow arrows between components.
+IMPORTANT: Do NOT create a simple linear chain where each component points to the next in sequence.
+Instead, analyze the actual dependency relationships (shown in [deps: ...] above) and draw arrows
+that reflect real data flow and function calls between components.
+Use subgraph blocks to group related components into layers (e.g. CLI Layer, Core Engine, Storage, Output).
+Each subgraph should contain the specific internal components, not just one box per feature.
+Show multiple arrows from/to components that have multiple dependencies.
 Only output the Mermaid code, no fences.`, contextSection, summary.String())
 
 	resp, err := provider.Complete(ctx, llm.CompletionRequest{
