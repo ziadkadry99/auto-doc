@@ -144,6 +144,7 @@ Write a thorough, comprehensive answer that:
 3. References specific file paths in backticks (e.g. `+"`"+`path/to/file.go`+"`"+`).
 4. Never cut off a list — always complete it. If there are 4 items, name all 4.
 5. Include implementation details: function names, data flow, protocols, and configuration.
+6. For failure analysis / SPOF / "what if X goes down" questions: clearly distinguish between COMPLETE OUTAGE (system unusable), NEAR-COMPLETE OUTAGE (most features broken), HIGH BLAST RADIUS (many features affected), and DEGRADED (specific features lost). Not every service is a SPOF — be precise about severity levels.
 
 Your answer MUST be at least 200 words. Be thorough and detailed.
 Be factual and grounded in the provided context.`, query, resultsContext)

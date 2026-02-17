@@ -112,6 +112,10 @@ const architectureTemplate = `# Architecture Overview
 
 {{ .ServiceDependencies }}
 {{ end }}
+{{ if .CriticalPath }}## Critical Path and Failure Analysis
+
+{{ .CriticalPath }}
+{{ end }}
 {{ if .EntryPoints }}## Entry Points
 
 | Name | Type | Description |

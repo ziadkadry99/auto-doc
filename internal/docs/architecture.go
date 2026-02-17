@@ -19,6 +19,7 @@ type archData struct {
 	Languages           string
 	Components          []diagrams.Component
 	ServiceDependencies string
+	CriticalPath        string
 	EntryPoints         []EntryPoint
 	ExitPoints          []ExitPoint
 	DataFlow            string
@@ -91,6 +92,14 @@ DESCRIPTION: What it produces
 ===DATAFLOW===
 Describe how data flows through the system in 2-3 paragraphs. Include specific service names and protocols.
 
+===CRITICAL_PATH===
+Analyze failure modes and single points of failure (SPOFs). For each service/component, classify its failure impact:
+- COMPLETE OUTAGE: The entire system becomes unusable if this service fails (e.g. the only user-facing entry point)
+- NEAR-COMPLETE OUTAGE: Most functionality breaks (e.g. a service called by nearly all other services)
+- HIGH BLAST RADIUS: Multiple important features break but some functionality remains
+- DEGRADED: Only specific features are affected, core functionality continues
+List each service with its failure classification and explain why.
+
 ===PATTERNS===
 List design patterns used, one per line.`, summary.String(), depSummary.String())
 
@@ -100,7 +109,7 @@ List design patterns used, one per line.`, summary.String(), depSummary.String()
 			{Role: llm.RoleSystem, Content: "You are a software architect analyzing a codebase. Be concise and factual. Always include concrete details like port numbers, specific languages per service, and exact protocol names."},
 			{Role: llm.RoleUser, Content: prompt},
 		},
-		MaxTokens:   4096,
+		MaxTokens:   8192,
 		Temperature: 0.3,
 	})
 	if err != nil {
@@ -166,6 +175,7 @@ func parseArchResponse(content string) archData {
 		"===LANGUAGES===",
 		"===COMPONENTS===",
 		"===SERVICE_DEPENDENCIES===",
+		"===CRITICAL_PATH===",
 		"===ENTRY_POINTS===",
 		"===EXIT_POINTS===",
 		"===DATAFLOW===",
@@ -191,6 +201,7 @@ func parseArchResponse(content string) archData {
 		"===OVERVIEW===":              &data.Overview,
 		"===LANGUAGES===":             &data.Languages,
 		"===SERVICE_DEPENDENCIES===":  &data.ServiceDependencies,
+		"===CRITICAL_PATH===":         &data.CriticalPath,
 		"===DATAFLOW===":              &data.DataFlow,
 	}
 	for marker, field := range sections {
