@@ -74,7 +74,11 @@ func (b *Batcher) ProcessFiles(ctx context.Context, files []walker.FileInfo) *Ba
 			mu.Lock()
 			result.Errors = append(result.Errors, ctx.Err())
 			mu.Unlock()
-			break
+			count := atomic.AddInt64(&processed, 1)
+			if b.onProgress != nil {
+				b.onProgress(int(count), total, file.RelPath)
+			}
+			continue
 		case sem <- struct{}{}:
 		}
 
