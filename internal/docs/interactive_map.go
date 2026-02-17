@@ -146,8 +146,6 @@ func buildMapData(analyses []indexer.FileAnalysis, features []Feature, projectNa
 	seen := make(map[string]bool)
 	edges := make([]mapEdge, 0)
 	for _, a := range analyses {
-		srcFeature := fileFeature[a.FilePath]
-
 		// Get deps from structured field, or parse from summary.
 		var depNames []string
 		for _, d := range a.Dependencies {
@@ -164,10 +162,10 @@ func buildMapData(analyses []indexer.FileAnalysis, features []Feature, projectNa
 					continue
 				}
 				// Pick a representative target file in this package
-				// that is in a different feature than the source.
+				// (skip self-edges only).
 				var target string
 				for _, t := range pkgFiles[pkg] {
-					if t != a.FilePath && fileFeature[t] != srcFeature {
+					if t != a.FilePath {
 						target = t
 						break
 					}
@@ -245,8 +243,35 @@ func depMatchesPkg(depName, pkgPath string) bool {
 		return true
 	}
 	base := filepath.Base(pkgPath)
-	if base != "." && depName == base {
+	if base == "." {
+		return false
+	}
+	if depName == base {
 		return true
+	}
+	// Case-insensitive matching.
+	depLower := strings.ToLower(depName)
+	baseLower := strings.ToLower(base)
+	if depLower == baseLower {
+		return true
+	}
+	// Strip common suffixes ("service", "svc") and compare.
+	for _, suffix := range []string{"service", "svc"} {
+		stripped := strings.TrimSuffix(depLower, suffix)
+		if stripped != "" && stripped != depLower {
+			if stripped == baseLower {
+				return true
+			}
+			if baseLower == stripped+"service" {
+				return true
+			}
+		}
+	}
+	// Substring containment.
+	if len(depLower) >= 3 && len(baseLower) >= 3 {
+		if strings.Contains(depLower, baseLower) || strings.Contains(baseLower, depLower) {
+			return true
+		}
 	}
 	return false
 }

@@ -378,6 +378,7 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 		end := findSectionEnd(after, "===USAGES===")
 		lines := strings.Split(strings.TrimSpace(after[:end]), "\n")
 		var current *UsageExample
+		var lastField string // tracks "command" or "description" for continuation lines
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" {
@@ -390,10 +391,29 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 				current = &UsageExample{
 					Title: strings.TrimSpace(strings.TrimPrefix(line, "EXAMPLE:")),
 				}
+				lastField = ""
 			} else if strings.HasPrefix(line, "COMMAND:") && current != nil {
 				current.Command = strings.TrimSpace(strings.TrimPrefix(line, "COMMAND:"))
+				lastField = "command"
 			} else if strings.HasPrefix(line, "DESCRIPTION:") && current != nil {
 				current.Description = strings.TrimSpace(strings.TrimPrefix(line, "DESCRIPTION:"))
+				lastField = "description"
+			} else if current != nil {
+				// Continuation line: append to the most recently set field.
+				switch lastField {
+				case "command":
+					if current.Command != "" {
+						current.Command += "\n" + line
+					} else {
+						current.Command = line
+					}
+				case "description":
+					if current.Description != "" {
+						current.Description += " " + line
+					} else {
+						current.Description = line
+					}
+				}
 			}
 		}
 		if current != nil {

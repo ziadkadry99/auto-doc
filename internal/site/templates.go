@@ -854,7 +854,42 @@ body {
   background: var(--bg-secondary);
   border-radius: 8px;
   border: 1px solid var(--border);
-  overflow-x: auto;
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+}
+
+.mermaid.panning {
+  cursor: grabbing;
+}
+
+.mermaid-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 10;
+}
+
+.mermaid-controls button {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.mermaid-controls button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* ============ Responsive ============ */
@@ -960,10 +995,18 @@ const jsContent = `(function() {
         var src = el.getAttribute("data-source");
         if (src) {
           el.removeAttribute("data-processed");
+          el.removeAttribute("data-panzoom");
+          // Remove old controls before re-rendering
+          var oldControls = el.querySelector(".mermaid-controls");
+          if (oldControls) oldControls.remove();
           el.innerHTML = src;
         }
       });
       mermaid.run({ querySelector: ".mermaid" });
+      // Re-apply pan/zoom after Mermaid re-renders SVGs.
+      if (typeof setupMermaidPanZoom === "function") {
+        setTimeout(setupMermaidPanZoom, 500);
+      }
     }
   }
 
@@ -1247,6 +1290,129 @@ const jsContent = `(function() {
     pre.appendChild(btn);
   });
 
+  // ===== Mermaid pan/zoom =====
+  function setupMermaidPanZoom() {
+    document.querySelectorAll(".mermaid").forEach(function(container) {
+      var svg = container.querySelector("svg");
+      if (!svg || container.getAttribute("data-panzoom") === "true") return;
+      container.setAttribute("data-panzoom", "true");
+
+      // Ensure SVG has a viewBox for transform-based zoom/pan.
+      if (!svg.getAttribute("viewBox")) {
+        var bbox = svg.getBBox();
+        var w = parseFloat(svg.getAttribute("width")) || bbox.width + bbox.x;
+        var h = parseFloat(svg.getAttribute("height")) || bbox.height + bbox.y;
+        svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+      }
+      svg.setAttribute("width", "100%");
+      svg.setAttribute("height", "100%");
+      svg.style.maxWidth = "none";
+
+      var state = { scale: 1, panX: 0, panY: 0, dragging: false, startX: 0, startY: 0 };
+
+      function applyTransform() {
+        svg.style.transform = "translate(" + state.panX + "px, " + state.panY + "px) scale(" + state.scale + ")";
+        svg.style.transformOrigin = "0 0";
+      }
+
+      function resetView() {
+        state.scale = 1;
+        state.panX = 0;
+        state.panY = 0;
+        applyTransform();
+      }
+
+      // Mouse wheel → zoom
+      container.addEventListener("wheel", function(e) {
+        e.preventDefault();
+        var delta = e.deltaY > 0 ? 0.9 : 1.1;
+        var newScale = Math.max(0.1, Math.min(10, state.scale * delta));
+        // Zoom towards cursor position
+        var rect = container.getBoundingClientRect();
+        var cx = e.clientX - rect.left;
+        var cy = e.clientY - rect.top;
+        state.panX = cx - (cx - state.panX) * (newScale / state.scale);
+        state.panY = cy - (cy - state.panY) * (newScale / state.scale);
+        state.scale = newScale;
+        applyTransform();
+      }, { passive: false });
+
+      // Mouse drag → pan
+      container.addEventListener("mousedown", function(e) {
+        if (e.button !== 0) return;
+        state.dragging = true;
+        state.startX = e.clientX - state.panX;
+        state.startY = e.clientY - state.panY;
+        container.classList.add("panning");
+        e.preventDefault();
+      });
+
+      document.addEventListener("mousemove", function(e) {
+        if (!state.dragging) return;
+        state.panX = e.clientX - state.startX;
+        state.panY = e.clientY - state.startY;
+        applyTransform();
+      });
+
+      document.addEventListener("mouseup", function() {
+        if (state.dragging) {
+          state.dragging = false;
+          container.classList.remove("panning");
+        }
+      });
+
+      // Double-click → reset
+      container.addEventListener("dblclick", function(e) {
+        e.preventDefault();
+        resetView();
+      });
+
+      // Touch support
+      container.addEventListener("touchstart", function(e) {
+        if (e.touches.length === 1) {
+          state.dragging = true;
+          state.startX = e.touches[0].clientX - state.panX;
+          state.startY = e.touches[0].clientY - state.panY;
+          container.classList.add("panning");
+        }
+      }, { passive: true });
+
+      container.addEventListener("touchmove", function(e) {
+        if (!state.dragging || e.touches.length !== 1) return;
+        e.preventDefault();
+        state.panX = e.touches[0].clientX - state.startX;
+        state.panY = e.touches[0].clientY - state.startY;
+        applyTransform();
+      }, { passive: false });
+
+      container.addEventListener("touchend", function() {
+        state.dragging = false;
+        container.classList.remove("panning");
+      });
+
+      // Add zoom controls
+      var controls = document.createElement("div");
+      controls.className = "mermaid-controls";
+      controls.innerHTML = '<button title="Zoom in">+</button><button title="Zoom out">&minus;</button><button title="Reset">&#8634;</button>';
+      var btns = controls.querySelectorAll("button");
+      btns[0].addEventListener("click", function(e) {
+        e.stopPropagation();
+        state.scale = Math.min(10, state.scale * 1.25);
+        applyTransform();
+      });
+      btns[1].addEventListener("click", function(e) {
+        e.stopPropagation();
+        state.scale = Math.max(0.1, state.scale * 0.8);
+        applyTransform();
+      });
+      btns[2].addEventListener("click", function(e) {
+        e.stopPropagation();
+        resetView();
+      });
+      container.appendChild(controls);
+    });
+  }
+
   // ===== Mermaid initialization =====
   if (typeof mermaid !== "undefined") {
     // Store original source before Mermaid replaces it with SVG.
@@ -1261,6 +1427,8 @@ const jsContent = `(function() {
       theme: isDark ? "dark" : "default",
       securityLevel: "loose"
     });
+    // Set up pan/zoom after Mermaid renders SVGs.
+    setTimeout(setupMermaidPanZoom, 500);
   }
 })();
 `
