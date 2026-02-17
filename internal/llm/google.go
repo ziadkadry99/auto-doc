@@ -7,23 +7,35 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"golang.org/x/oauth2"
 )
 
 const googleAPIBaseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 // GoogleProvider implements Provider using the Google Gemini API via direct HTTP.
 type GoogleProvider struct {
-	apiKey string
-	model  string
-	client *http.Client
+	apiKey      string
+	tokenSource oauth2.TokenSource
+	model       string
+	client      *http.Client
 }
 
-// NewGoogleProvider creates a new Google Gemini provider.
+// NewGoogleProvider creates a new Google Gemini provider using an API key.
 func NewGoogleProvider(apiKey string, model string) *GoogleProvider {
 	return &GoogleProvider{
 		apiKey: apiKey,
 		model:  model,
 		client: &http.Client{},
+	}
+}
+
+// NewGoogleProviderWithTokenSource creates a Google provider using OAuth2 Bearer tokens.
+func NewGoogleProviderWithTokenSource(ts oauth2.TokenSource, model string) *GoogleProvider {
+	return &GoogleProvider{
+		tokenSource: ts,
+		model:       model,
+		client:      &http.Client{},
 	}
 }
 
@@ -136,12 +148,25 @@ func (p *GoogleProvider) Complete(ctx context.Context, req CompletionRequest) (*
 		return nil, fmt.Errorf("failed to marshal gemini request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", googleAPIBaseURL, model, p.apiKey)
+	var url string
+	if p.tokenSource != nil {
+		url = fmt.Sprintf("%s/%s:generateContent", googleAPIBaseURL, model)
+	} else {
+		url = fmt.Sprintf("%s/%s:generateContent?key=%s", googleAPIBaseURL, model, p.apiKey)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+
+	if p.tokenSource != nil {
+		token, err := p.tokenSource.Token()
+		if err != nil {
+			return nil, fmt.Errorf("getting OAuth2 token: %w", err)
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	}
 
 	httpResp, err := p.client.Do(httpReq)
 	if err != nil {

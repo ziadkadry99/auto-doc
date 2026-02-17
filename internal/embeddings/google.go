@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"golang.org/x/oauth2"
 )
 
 const googleEmbedEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:embedContent?key=%s"
@@ -29,17 +31,27 @@ func (m GoogleModel) dimensions() int {
 
 // GoogleEmbedder generates embeddings using Google's Generative AI API.
 type GoogleEmbedder struct {
-	apiKey     string
-	model      GoogleModel
-	httpClient *http.Client
+	apiKey      string
+	tokenSource oauth2.TokenSource
+	model       GoogleModel
+	httpClient  *http.Client
 }
 
-// NewGoogleEmbedder creates a new Google embedder.
+// NewGoogleEmbedder creates a new Google embedder using an API key.
 func NewGoogleEmbedder(apiKey string, model GoogleModel) *GoogleEmbedder {
 	return &GoogleEmbedder{
 		apiKey:     apiKey,
 		model:      model,
 		httpClient: &http.Client{},
+	}
+}
+
+// NewGoogleEmbedderWithTokenSource creates a Google embedder using OAuth2 Bearer tokens.
+func NewGoogleEmbedderWithTokenSource(ts oauth2.TokenSource, model GoogleModel) *GoogleEmbedder {
+	return &GoogleEmbedder{
+		tokenSource: ts,
+		model:       model,
+		httpClient:  &http.Client{},
 	}
 }
 
@@ -95,12 +107,25 @@ func (e *GoogleEmbedder) embedSingle(ctx context.Context, text string) ([]float3
 		return nil, fmt.Errorf("marshal google embed request: %w", err)
 	}
 
-	url := fmt.Sprintf(googleEmbedEndpoint, e.model, e.apiKey)
+	var url string
+	if e.tokenSource != nil {
+		url = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:embedContent", e.model)
+	} else {
+		url = fmt.Sprintf(googleEmbedEndpoint, e.model, e.apiKey)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create google embed request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	if e.tokenSource != nil {
+		token, err := e.tokenSource.Token()
+		if err != nil {
+			return nil, fmt.Errorf("getting OAuth2 token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	}
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {

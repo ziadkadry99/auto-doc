@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ziadkadry99/auto-doc/internal/auth"
 	"github.com/ziadkadry99/auto-doc/internal/config"
 	"github.com/ziadkadry99/auto-doc/internal/embeddings"
 	"github.com/ziadkadry99/auto-doc/internal/llm"
@@ -24,24 +25,30 @@ func createEmbedderFromConfig(cfg *config.Config) (embeddings.Embedder, error) {
 
 	switch provider {
 	case config.ProviderOpenAI:
-		apiKey := os.Getenv(config.APIKeyEnvVar(config.ProviderOpenAI))
+		apiKey := auth.GetAPIKey("openai")
 		if apiKey == "" {
-			return nil, fmt.Errorf("OPENAI_API_KEY environment variable is required for OpenAI embeddings")
+			return nil, fmt.Errorf("OpenAI API key not found.\nRun `autodoc auth openai` or set OPENAI_API_KEY")
 		}
 		return embeddings.NewOpenAIEmbedder(apiKey, embeddings.OpenAIModel(model)), nil
 	case config.ProviderGoogle:
 		apiKey := os.Getenv(config.APIKeyEnvVar(config.ProviderGoogle))
-		if apiKey == "" {
-			return nil, fmt.Errorf("GOOGLE_API_KEY environment variable is required for Google embeddings")
+		if apiKey != "" {
+			return embeddings.NewGoogleEmbedder(apiKey, embeddings.GoogleModel(model)), nil
 		}
-		return embeddings.NewGoogleEmbedder(apiKey, embeddings.GoogleModel(model)), nil
+		// Try OAuth2 credentials.
+		creds, err := auth.Load()
+		if err == nil && creds.Google != nil && creds.Google.RefreshToken != "" {
+			ts := auth.NewGoogleTokenSource(creds.Google)
+			return embeddings.NewGoogleEmbedderWithTokenSource(ts, embeddings.GoogleModel(model)), nil
+		}
+		return nil, fmt.Errorf("Google API credentials not found.\nRun `autodoc auth google` or set GOOGLE_API_KEY")
 	case config.ProviderOllama:
 		return embeddings.NewOllamaEmbedder(model, 768, ""), nil
 	default:
 		// For providers without native embeddings, fall back to OpenAI.
-		apiKey := os.Getenv(config.APIKeyEnvVar(config.ProviderOpenAI))
+		apiKey := auth.GetAPIKey("openai")
 		if apiKey == "" {
-			return nil, fmt.Errorf("OPENAI_API_KEY is required (used for embeddings when provider is %s)", provider)
+			return nil, fmt.Errorf("OpenAI API key not found (used for embeddings when provider is %s).\nRun `autodoc auth openai` or set OPENAI_API_KEY", provider)
 		}
 		return embeddings.NewOpenAIEmbedder(apiKey, embeddings.OpenAIModel(model)), nil
 	}
