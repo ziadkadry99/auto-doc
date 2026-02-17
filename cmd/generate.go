@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -203,11 +204,6 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Generating markdown documentation...\n")
 	}
 
-	// Persist the vector store.
-	if err := store.Persist(ctx, vectorDir); err != nil {
-		return fmt.Errorf("persisting vector store: %w", err)
-	}
-
 	// Generate documentation for all tiers.
 	allDocs, err := getAllFileAnalyses(ctx, store, files)
 	if err == nil && len(allDocs) > 0 {
@@ -233,8 +229,23 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 			}
 			if err := docGen.GenerateArchitecture(ctx, allDocs, llmProvider, cfg.Model); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: architecture generation failed: %v\n", err)
+			} else {
+				// Index the architecture doc into the vector store.
+				archPath := filepath.Join(cfg.OutputDir, "docs", "architecture.md")
+				if archDocs, archErr := indexArchitecture(archPath); archErr == nil && len(archDocs) > 0 {
+					if err := store.AddDocuments(ctx, archDocs); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: failed to index architecture doc: %v\n", err)
+					} else if verbose {
+						fmt.Fprintf(os.Stderr, "Indexed %d architecture sections into vector store\n", len(archDocs))
+					}
+				}
 			}
 		}
+	}
+
+	// Persist the vector store (after architecture indexing).
+	if err := store.Persist(ctx, vectorDir); err != nil {
+		return fmt.Errorf("persisting vector store: %w", err)
 	}
 
 	// Print summary.
@@ -288,6 +299,92 @@ func getAllFileAnalyses(ctx context.Context, store vectordb.VectorStore, files [
 		analyses = append(analyses, analysis)
 	}
 	return analyses, nil
+}
+
+// indexArchitecture reads the architecture.md file and creates vector DB documents from its sections.
+func indexArchitecture(archPath string) ([]vectordb.Document, error) {
+	content, err := os.ReadFile(archPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading architecture doc: %w", err)
+	}
+
+	fullContent := string(content)
+	now := time.Now()
+	var docs []vectordb.Document
+
+	// Create a full-overview document (first 2000 chars).
+	overview := fullContent
+	if len(overview) > 2000 {
+		overview = overview[:2000]
+	}
+	docs = append(docs, vectordb.Document{
+		ID:      "arch:overview",
+		Content: overview,
+		Metadata: vectordb.DocumentMetadata{
+			FilePath:    "architecture.md",
+			Type:        vectordb.DocTypeArchitecture,
+			LastUpdated: now,
+		},
+	})
+
+	// Split by ## headers into sections and create one document per section.
+	sections := splitMarkdownSections(fullContent)
+	for _, sec := range sections {
+		if strings.TrimSpace(sec.content) == "" {
+			continue
+		}
+		id := fmt.Sprintf("arch:%s", strings.ToLower(strings.ReplaceAll(strings.TrimSpace(sec.title), " ", "-")))
+		docs = append(docs, vectordb.Document{
+			ID:      id,
+			Content: fmt.Sprintf("## %s\n\n%s", sec.title, sec.content),
+			Metadata: vectordb.DocumentMetadata{
+				FilePath:    "architecture.md",
+				Symbol:      sec.title,
+				Type:        vectordb.DocTypeArchitecture,
+				LastUpdated: now,
+			},
+		})
+	}
+
+	return docs, nil
+}
+
+type markdownSection struct {
+	title   string
+	content string
+}
+
+// splitMarkdownSections splits markdown content by ## headers.
+func splitMarkdownSections(content string) []markdownSection {
+	lines := strings.Split(content, "\n")
+	var sections []markdownSection
+	var currentTitle string
+	var currentLines []string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "## ") {
+			// Save previous section if any.
+			if currentTitle != "" {
+				sections = append(sections, markdownSection{
+					title:   currentTitle,
+					content: strings.Join(currentLines, "\n"),
+				})
+			}
+			currentTitle = strings.TrimPrefix(line, "## ")
+			currentLines = nil
+		} else if currentTitle != "" {
+			currentLines = append(currentLines, line)
+		}
+	}
+	// Save last section.
+	if currentTitle != "" {
+		sections = append(sections, markdownSection{
+			title:   currentTitle,
+			content: strings.Join(currentLines, "\n"),
+		})
+	}
+
+	return sections
 }
 
 // printCostEstimate displays cost estimate results.

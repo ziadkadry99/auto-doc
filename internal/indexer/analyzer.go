@@ -88,9 +88,48 @@ func (a *FileAnalyzer) Analyze(ctx context.Context, filePath string, content []b
 		return nil, fmt.Errorf("llm completion: %w", err)
 	}
 
+	// If the response was truncated by token limit, retry with higher MaxTokens.
+	if resp.FinishReason == "MAX_TOKENS" || resp.FinishReason == "length" {
+		retryResp, retryErr := a.completeWithRetry(ctx, llm.CompletionRequest{
+			Model:       a.model,
+			Messages:    messages,
+			MaxTokens:   8192,
+			Temperature: 0.1,
+			JSONMode:    true,
+		})
+		if retryErr == nil {
+			resp.InputTokens += retryResp.InputTokens
+			resp.OutputTokens += retryResp.OutputTokens
+			resp.Content = retryResp.Content
+			resp.FinishReason = retryResp.FinishReason
+		}
+	}
+
 	analysis, parseErr := parseAnalysis(resp.Content)
 	if parseErr != nil {
-		// Retry with a simpler fallback prompt.
+		// Step 1: Try to repair truncated JSON (close unclosed braces/brackets).
+		repaired := tryRepairJSON(resp.Content)
+		if repaired != resp.Content {
+			analysis, parseErr = parseAnalysis(repaired)
+		}
+	}
+	if parseErr != nil {
+		// Step 2: Retry the SAME prompt with slightly higher temperature.
+		retryResp, retryErr := a.completeWithRetry(ctx, llm.CompletionRequest{
+			Model:       a.model,
+			Messages:    messages,
+			MaxTokens:   4096,
+			Temperature: 0.2,
+			JSONMode:    true,
+		})
+		if retryErr == nil {
+			resp.InputTokens += retryResp.InputTokens
+			resp.OutputTokens += retryResp.OutputTokens
+			analysis, parseErr = parseAnalysis(retryResp.Content)
+		}
+	}
+	if parseErr != nil {
+		// Step 3: Retry with a simpler fallback prompt.
 		fallbackMsgs := buildFallbackMessages(filePath, contentStr)
 		fallbackResp, fallbackErr := a.completeWithRetry(ctx, llm.CompletionRequest{
 			Model:       a.model,
@@ -100,7 +139,6 @@ func (a *FileAnalyzer) Analyze(ctx context.Context, filePath string, content []b
 			JSONMode:    true,
 		})
 		if fallbackErr != nil {
-			// Return a minimal analysis with just the file path.
 			analysis = &FileAnalysis{
 				FilePath: filePath,
 				Language: language,
@@ -129,6 +167,85 @@ func (a *FileAnalyzer) Analyze(ctx context.Context, filePath string, content []b
 		InputTokens:  resp.InputTokens,
 		OutputTokens: resp.OutputTokens,
 	}, nil
+}
+
+// tryRepairJSON attempts to fix truncated JSON by closing unclosed braces and brackets.
+func tryRepairJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+
+	// Strip markdown code fences if present.
+	if strings.HasPrefix(raw, "```") {
+		lines := strings.Split(raw, "\n")
+		if len(lines) >= 2 {
+			start := 1
+			end := len(lines)
+			if strings.TrimSpace(lines[end-1]) == "```" {
+				end--
+			}
+			raw = strings.Join(lines[start:end], "\n")
+		}
+	}
+
+	// Count unclosed braces and brackets.
+	openBraces := 0
+	openBrackets := 0
+	inString := false
+	escaped := false
+
+	for _, ch := range raw {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch ch {
+		case '{':
+			openBraces++
+		case '}':
+			openBraces--
+		case '[':
+			openBrackets++
+		case ']':
+			openBrackets--
+		}
+	}
+
+	if openBraces <= 0 && openBrackets <= 0 {
+		return raw // Nothing to repair.
+	}
+
+	// If we're in a string, close it first.
+	if inString {
+		raw += `"`
+	}
+
+	// Trim trailing comma if present.
+	trimmed := strings.TrimRight(raw, " \t\n\r")
+	if strings.HasSuffix(trimmed, ",") {
+		raw = trimmed[:len(trimmed)-1]
+	}
+
+	// Close open brackets then braces.
+	for openBrackets > 0 {
+		raw += "]"
+		openBrackets--
+	}
+	for openBraces > 0 {
+		raw += "}"
+		openBraces--
+	}
+
+	return raw
 }
 
 // parseAnalysis parses an LLM JSON response into a FileAnalysis struct.

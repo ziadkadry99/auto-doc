@@ -61,29 +61,45 @@ func (s *ChromemStore) Search(ctx context.Context, query string, limit int, filt
 		limit = 10
 	}
 
-	// chromem-go requires nResults <= collection size.
-	if count := s.collection.Count(); limit > count && count > 0 {
-		limit = count
-	} else if count == 0 {
+	// Fetch extra results for deduplication.
+	fetchLimit := limit * 2
+	count := s.collection.Count()
+	if count == 0 {
 		return nil, nil
+	}
+	if fetchLimit > count {
+		fetchLimit = count
 	}
 
 	where := buildWhereClause(filter)
 
-	results, err := s.collection.Query(ctx, query, limit, where, nil)
+	results, err := s.collection.Query(ctx, query, fetchLimit, where, nil)
 	if err != nil {
 		return nil, fmt.Errorf("chromem query: %w", err)
 	}
 
-	searchResults := make([]SearchResult, len(results))
-	for i, r := range results {
-		searchResults[i] = SearchResult{
+	// Deduplicate: max 2 results per file path.
+	const maxPerFile = 2
+	fileCount := make(map[string]int)
+	var searchResults []SearchResult
+
+	for _, r := range results {
+		meta := mapToMetadata(r.Metadata)
+		fp := meta.FilePath
+		if fileCount[fp] >= maxPerFile {
+			continue
+		}
+		fileCount[fp]++
+		searchResults = append(searchResults, SearchResult{
 			Document: Document{
 				ID:       r.ID,
 				Content:  r.Content,
-				Metadata: mapToMetadata(r.Metadata),
+				Metadata: meta,
 			},
 			Similarity: r.Similarity,
+		})
+		if len(searchResults) >= limit {
+			break
 		}
 	}
 

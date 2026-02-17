@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ziadkadry99/auto-doc/internal/config"
@@ -113,6 +114,14 @@ func (p *Pipeline) Run(ctx context.Context, files []walker.FileInfo) (*PipelineR
 		result.FilesProcessed++
 	}
 
+	// Build and index reverse-dependency documents.
+	reverseDeps := buildReverseDependencyDocs(result.Analyses)
+	if len(reverseDeps) > 0 {
+		if err := p.store.AddDocuments(ctx, reverseDeps); err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("store reverse-dep docs: %w", err))
+		}
+	}
+
 	// Persist the vector store.
 	autodocDir := fmt.Sprintf("%s/.autodoc", p.rootDir)
 	if err := p.store.Persist(ctx, autodocDir); err != nil {
@@ -193,4 +202,46 @@ func (p *Pipeline) DryRun(ctx context.Context, files []walker.FileInfo) (*CostEs
 	estimate.EstimatedCost = analysisCost + embeddingCost
 
 	return estimate, nil
+}
+
+// buildReverseDependencyDocs creates documents for dependencies that are used by 2+ files.
+// This enables "what depends on X" / blast-radius queries.
+func buildReverseDependencyDocs(analyses map[string]FileAnalysis) []vectordb.Document {
+	// Build reverse map: dependency name → list of files that depend on it.
+	reverseMap := make(map[string][]string)
+	for _, analysis := range analyses {
+		for _, dep := range analysis.Dependencies {
+			reverseMap[dep.Name] = append(reverseMap[dep.Name], analysis.FilePath)
+		}
+	}
+
+	now := time.Now()
+	var docs []vectordb.Document
+
+	for depName, dependents := range reverseMap {
+		if len(dependents) < 2 {
+			continue
+		}
+
+		var parts []string
+		parts = append(parts, fmt.Sprintf("Dependency: %s", depName))
+		parts = append(parts, fmt.Sprintf("Used by %d files (blast radius):", len(dependents)))
+		for _, f := range dependents {
+			parts = append(parts, fmt.Sprintf("- %s depends on %s", f, depName))
+		}
+		parts = append(parts, fmt.Sprintf("\nChanges to %s could affect all %d files listed above.", depName, len(dependents)))
+
+		docs = append(docs, vectordb.Document{
+			ID:      fmt.Sprintf("reverse-dep:%s", strings.ToLower(strings.ReplaceAll(depName, "/", "-"))),
+			Content: strings.Join(parts, "\n"),
+			Metadata: vectordb.DocumentMetadata{
+				FilePath:    depName,
+				Type:        vectordb.DocTypeFile,
+				Symbol:      "reverse-dependency",
+				LastUpdated: now,
+			},
+		})
+	}
+
+	return docs
 }

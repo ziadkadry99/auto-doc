@@ -138,28 +138,65 @@ Here are the most relevant documentation excerpts found via semantic search:
 
 %s
 
-Write a thorough answer (3-8 sentences) that:
+Write a thorough, comprehensive answer that:
 1. Directly answers the question with specific details — list all items, name all components, include key facts.
 2. Provides broader context about how this fits into the project's architecture.
 3. References specific file paths in backticks (e.g. `+"`"+`path/to/file.go`+"`"+`).
 4. Never cut off a list — always complete it. If there are 4 items, name all 4.
+5. Include implementation details: function names, data flow, protocols, and configuration.
 
+Your answer MUST be at least 200 words. Be thorough and detailed.
 Be factual and grounded in the provided context.`, query, resultsContext)
+
+	systemMsg := "You are a knowledgeable code documentation assistant. You provide complete, detailed answers about the codebase — at least 200 words per answer. Always finish lists and enumerate all items. Reference file paths in backticks. Give architectural context when relevant. Include implementation details like function names, data flow, and protocols."
 
 	resp, err := provider.Complete(ctx, llm.CompletionRequest{
 		Model: model,
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: "You are a knowledgeable code documentation assistant. You provide complete, detailed answers about the codebase. Always finish lists and enumerate all items. Reference file paths in backticks. Give architectural context when relevant."},
+			{Role: llm.RoleSystem, Content: systemMsg},
 			{Role: llm.RoleUser, Content: prompt},
 		},
-		MaxTokens:   1024,
+		MaxTokens:   4096,
 		Temperature: 0.3,
 	})
 	if err != nil {
 		return ""
 	}
 
-	return strings.TrimSpace(resp.Content)
+	answer := strings.TrimSpace(resp.Content)
+
+	// Retry if answer is too short and was not truncated by token limit.
+	if len(answer) < 500 && resp.FinishReason != "MAX_TOKENS" && resp.FinishReason != "length" {
+		expandPrompt := fmt.Sprintf(`Your previous answer was too brief. Please expand significantly.
+
+Question: "%s"
+
+Context:
+%s
+
+Previous answer (too short):
+%s
+
+Write a much more detailed answer — at least 200 words. Include all relevant file paths, function names, data flow details, architectural context, and implementation specifics. Do not summarize — be comprehensive.`, query, resultsContext, answer)
+
+		retryResp, retryErr := provider.Complete(ctx, llm.CompletionRequest{
+			Model: model,
+			Messages: []llm.Message{
+				{Role: llm.RoleSystem, Content: systemMsg},
+				{Role: llm.RoleUser, Content: expandPrompt},
+			},
+			MaxTokens:   4096,
+			Temperature: 0.5,
+		})
+		if retryErr == nil {
+			retryAnswer := strings.TrimSpace(retryResp.Content)
+			if len(retryAnswer) > len(answer) {
+				answer = retryAnswer
+			}
+		}
+	}
+
+	return answer
 }
 
 // openBrowser opens the given URL in the default browser.
