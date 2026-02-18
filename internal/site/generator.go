@@ -3,7 +3,6 @@ package site
 import (
 	"bytes"
 	"fmt"
-	stdhtml "html"
 	"html/template"
 	"os"
 	"path/filepath"
@@ -245,32 +244,11 @@ func extractTitle(content, relPath string) string {
 	return strings.TrimSuffix(filepath.Base(relPath), ".md")
 }
 
-// postProcessMermaid converts <pre><code class="language-mermaid">...</code></pre>
-// blocks into <div class="mermaid">...</div> for Mermaid.js rendering.
+// postProcessMermaid is a no-op. Mermaid code blocks are left as
+// <pre><code class="language-mermaid"> and converted to mermaid divs
+// by JavaScript at runtime, which correctly handles HTML entity decoding
+// via the browser's textContent API.
 func postProcessMermaid(html string) string {
-	// Look for code blocks with language-mermaid class.
-	const openTag = `<pre><code class="language-mermaid">`
-	const closeTag = `</code></pre>`
-
-	for {
-		idx := strings.Index(html, openTag)
-		if idx == -1 {
-			break
-		}
-		endIdx := strings.Index(html[idx:], closeTag)
-		if endIdx == -1 {
-			break
-		}
-		endIdx += idx
-
-		mermaidContent := html[idx+len(openTag) : endIdx]
-		// The markdown renderer HTML-escapes content inside code blocks
-		// (e.g., --> becomes --&gt;). Mermaid.js needs raw text, so unescape.
-		mermaidContent = stdhtml.UnescapeString(mermaidContent)
-		replacement := `<div class="mermaid">` + mermaidContent + `</div>`
-		html = html[:idx] + replacement + html[endIdx+len(closeTag):]
-	}
-
 	return html
 }
 

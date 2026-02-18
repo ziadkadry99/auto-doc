@@ -171,11 +171,10 @@ A --> B</code></pre><p>End</p>`
 
 	got := postProcessMermaid(input)
 
-	if strings.Contains(got, `language-mermaid`) {
-		t.Error("should have removed language-mermaid code block")
-	}
-	if !strings.Contains(got, `<div class="mermaid">`) {
-		t.Error("should have added mermaid div")
+	// postProcessMermaid is now a no-op; mermaid code blocks are converted
+	// to mermaid divs by JavaScript at runtime for proper HTML entity handling.
+	if !strings.Contains(got, `language-mermaid`) {
+		t.Error("should preserve language-mermaid code block for JS conversion")
 	}
 	if !strings.Contains(got, "graph TD") {
 		t.Error("should preserve mermaid content")
@@ -330,15 +329,15 @@ The system has several components.
 		t.Error("index.html should include mermaid script")
 	}
 
-	// Verify architecture.html has mermaid div instead of code block.
+	// Verify architecture.html has mermaid code block (JS converts to div at runtime).
 	archContent, err := os.ReadFile(filepath.Join(outputDir, "architecture.html"))
 	if err != nil {
 		t.Fatalf("reading architecture.html: %v", err)
 	}
 	archStr := string(archContent)
 
-	if !strings.Contains(archStr, `class="mermaid"`) {
-		t.Error("architecture.html should contain mermaid div")
+	if !strings.Contains(archStr, `language-mermaid`) {
+		t.Error("architecture.html should contain mermaid code block")
 	}
 
 	// Verify cmd/root.go.html has syntax-highlighted code.
