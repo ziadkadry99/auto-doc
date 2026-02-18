@@ -71,9 +71,10 @@ func (m *mockStore) DeleteByFilePath(_ context.Context, path string) error {
 	return nil
 }
 
-func (m *mockStore) Persist(_ context.Context, _ string) error { return nil }
-func (m *mockStore) Load(_ context.Context, _ string) error    { return nil }
-func (m *mockStore) Count() int                                { return len(m.docs) }
+func (m *mockStore) DeleteByRepoID(_ context.Context, _ string) error { return nil }
+func (m *mockStore) Persist(_ context.Context, _ string) error        { return nil }
+func (m *mockStore) Load(_ context.Context, _ string) error           { return nil }
+func (m *mockStore) Count() int                                       { return len(m.docs) }
 
 // --- Mock Embedder ---
 

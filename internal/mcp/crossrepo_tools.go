@@ -62,6 +62,30 @@ var getTeamServicesTool = mcp.NewTool("get_team_services",
 	),
 )
 
+// listReposTool lists all registered repos with summaries.
+var listReposTool = mcp.NewTool("list_repos",
+	mcp.WithDescription("List all registered repositories in the central documentation server, with their status, file counts, and summaries."),
+)
+
+// getRepoDetailsTool gets full details for a specific repo.
+var getRepoDetailsTool = mcp.NewTool("get_repo_details",
+	mcp.WithDescription("Get full details for a registered repository including entry points, cross-service links, and ownership."),
+	mcp.WithString("name",
+		mcp.Required(),
+		mcp.Description("Name of the repository to get details for"),
+	),
+)
+
+// getSystemDiagramTool returns the combined Mermaid diagram.
+var getSystemDiagramTool = mcp.NewTool("get_system_diagram",
+	mcp.WithDescription("Get a Mermaid diagram showing the system architecture with all registered services and their cross-service dependencies."),
+)
+
+// getServiceMapDataTool returns the service map JSON data.
+var getServiceMapDataTool = mcp.NewTool("get_service_map_data",
+	mcp.WithDescription("Get the service map data (nodes and edges) as JSON for all registered services and their connections."),
+)
+
 // provideContextTool allows AI assistants to feed back context about a service.
 var provideContextTool = mcp.NewTool("provide_context",
 	mcp.WithDescription("Provide additional context or knowledge about a service. This information is saved as a fact and used to improve future documentation and answers."),

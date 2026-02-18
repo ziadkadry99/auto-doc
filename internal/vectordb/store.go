@@ -16,6 +16,9 @@ type VectorStore interface {
 	// DeleteByFilePath removes all documents associated with the given file path.
 	DeleteByFilePath(ctx context.Context, filePath string) error
 
+	// DeleteByRepoID removes all documents associated with the given repository ID.
+	DeleteByRepoID(ctx context.Context, repoID string) error
+
 	// Persist saves the store's data to the given directory.
 	Persist(ctx context.Context, dir string) error
 

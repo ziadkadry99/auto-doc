@@ -106,6 +106,9 @@ func (s *Server) LLMProvider() llm.Provider { return s.llmProvider }
 // LLMModel returns the configured LLM model name.
 func (s *Server) LLMModel() string { return s.llmModel }
 
+// Config returns the server configuration.
+func (s *Server) ServerConfig() Config { return s.cfg }
+
 // Start begins listening on the configured port.
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.cfg.Port)

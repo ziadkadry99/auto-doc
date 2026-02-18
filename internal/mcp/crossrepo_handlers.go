@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/ziadkadry99/auto-doc/internal/contextengine"
+	"github.com/ziadkadry99/auto-doc/internal/docs"
 )
 
 // handleSearchAcrossRepos performs semantic search across all indexed repos.
@@ -308,3 +309,207 @@ func (s *Server) handleProvideContext(ctx context.Context, request mcp.CallToolR
 
 	return mcp.NewToolResultText(fmt.Sprintf("Context saved for service %q (fact ID: %s, version: %d).", service, saved.ID, saved.Version)), nil
 }
+
+// handleListRepos lists all registered repositories.
+func (s *Server) handleListRepos(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.phase4 == nil || s.phase4.RepoStore == nil {
+		return mcp.NewToolResultError("Repository store not configured. Phase 4 dependencies are required for this tool."), nil
+	}
+
+	repos, err := s.phase4.RepoStore.List(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("listing repos: %v", err)), nil
+	}
+
+	if len(repos) == 0 {
+		return mcp.NewToolResultText("No repositories registered. Use `autodoc repo add` to register repositories."), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Registered Repositories (%d)\n\n", len(repos)))
+	for _, r := range repos {
+		sb.WriteString(fmt.Sprintf("## %s\n", r.DisplayName))
+		sb.WriteString(fmt.Sprintf("- **Name**: %s\n", r.Name))
+		sb.WriteString(fmt.Sprintf("- **Status**: %s\n", r.Status))
+		sb.WriteString(fmt.Sprintf("- **Files**: %d\n", r.FileCount))
+		sb.WriteString(fmt.Sprintf("- **Type**: %s\n", r.SourceType))
+		if r.Summary != "" {
+			sb.WriteString(fmt.Sprintf("- **Summary**: %s\n", r.Summary))
+		}
+		if r.LastIndexedAt != "" {
+			sb.WriteString(fmt.Sprintf("- **Last indexed**: %s\n", r.LastIndexedAt))
+		}
+		sb.WriteString("\n")
+	}
+
+	return mcp.NewToolResultText(sb.String()), nil
+}
+
+// handleGetRepoDetails gets full details for a specific repo.
+func (s *Server) handleGetRepoDetails(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError("missing required parameter: name"), nil
+	}
+
+	if s.phase4 == nil || s.phase4.RepoStore == nil {
+		return mcp.NewToolResultError("Repository store not configured. Phase 4 dependencies are required for this tool."), nil
+	}
+
+	repo, err := s.phase4.RepoStore.Get(ctx, name)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("getting repo: %v", err)), nil
+	}
+	if repo == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Repository %q not found.", name)), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Repository: %s\n\n", repo.DisplayName))
+	sb.WriteString(fmt.Sprintf("- **Name**: %s\n", repo.Name))
+	sb.WriteString(fmt.Sprintf("- **Status**: %s\n", repo.Status))
+	sb.WriteString(fmt.Sprintf("- **Files**: %d\n", repo.FileCount))
+	sb.WriteString(fmt.Sprintf("- **Source type**: %s\n", repo.SourceType))
+	if repo.SourceURL != "" {
+		sb.WriteString(fmt.Sprintf("- **Source URL**: %s\n", repo.SourceURL))
+	}
+	sb.WriteString(fmt.Sprintf("- **Local path**: %s\n", repo.LocalPath))
+	if repo.Summary != "" {
+		sb.WriteString(fmt.Sprintf("- **Summary**: %s\n", repo.Summary))
+	}
+	if repo.LastCommitSHA != "" {
+		sb.WriteString(fmt.Sprintf("- **Last commit**: %s\n", repo.LastCommitSHA))
+	}
+	if repo.LastIndexedAt != "" {
+		sb.WriteString(fmt.Sprintf("- **Last indexed**: %s\n", repo.LastIndexedAt))
+	}
+
+	// Include cross-service links.
+	links, err := s.phase4.RepoStore.GetLinks(ctx, name)
+	if err == nil && len(links) > 0 {
+		sb.WriteString("\n## Cross-Service Links\n\n")
+		for _, link := range links {
+			direction := "outgoing"
+			other := link.ToRepo
+			if link.ToRepo == name {
+				direction = "incoming"
+				other = link.FromRepo
+			}
+			sb.WriteString(fmt.Sprintf("- **%s** %s (%s): %s\n", other, direction, link.LinkType, link.Reason))
+		}
+	}
+
+	// Include ownership info.
+	if s.phase4.OrgStore != nil {
+		ownerships, err := s.phase4.OrgStore.GetOwnership(ctx, name)
+		if err == nil && len(ownerships) > 0 {
+			sb.WriteString("\n## Ownership\n\n")
+			for _, o := range ownerships {
+				sb.WriteString(fmt.Sprintf("- Team: %s (confidence: %s, source: %s)\n", o.TeamID, o.Confidence, o.Source))
+			}
+		}
+	}
+
+	return mcp.NewToolResultText(sb.String()), nil
+}
+
+// handleGetSystemDiagram returns the combined Mermaid system diagram.
+func (s *Server) handleGetSystemDiagram(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.phase4 == nil || s.phase4.RepoStore == nil {
+		return mcp.NewToolResultError("Repository store not configured. Phase 4 dependencies are required for this tool."), nil
+	}
+
+	repos, err := s.phase4.RepoStore.List(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("listing repos: %v", err)), nil
+	}
+
+	links, err := s.phase4.RepoStore.GetLinks(ctx, "")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("getting links: %v", err)), nil
+	}
+
+	// Convert to docs types.
+	docRepos := make([]docs.ServiceInfo, len(repos))
+	for i, r := range repos {
+		docRepos[i] = docs.ServiceInfo{
+			Name: r.Name, DisplayName: r.DisplayName, Summary: r.Summary,
+			FileCount: r.FileCount, SourceType: r.SourceType, Status: r.Status,
+		}
+	}
+	docLinks := make([]docs.ServiceLinkInfo, len(links))
+	for i, l := range links {
+		docLinks[i] = docs.ServiceLinkInfo{
+			FromRepo: l.FromRepo, ToRepo: l.ToRepo, LinkType: l.LinkType,
+			Reason: l.Reason, Endpoints: l.Endpoints,
+		}
+	}
+
+	diagram, err := docs.GenerateSystemDiagram(ctx, docRepos, docLinks, nil, "")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("generating diagram: %v", err)), nil
+	}
+
+	if diagram == "" {
+		return mcp.NewToolResultText("No system diagram available (no repositories registered)."), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("```mermaid\n%s\n```", diagram)), nil
+}
+
+// handleGetServiceMapData returns the service map JSON data.
+func (s *Server) handleGetServiceMapData(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.phase4 == nil || s.phase4.RepoStore == nil {
+		return mcp.NewToolResultError("Repository store not configured. Phase 4 dependencies are required for this tool."), nil
+	}
+
+	repos, err := s.phase4.RepoStore.List(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("listing repos: %v", err)), nil
+	}
+
+	links, err := s.phase4.RepoStore.GetLinks(ctx, "")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("getting links: %v", err)), nil
+	}
+
+	type mapNode struct {
+		Name       string `json:"name"`
+		Display    string `json:"display_name"`
+		Summary    string `json:"summary"`
+		FileCount  int    `json:"file_count"`
+		SourceType string `json:"source_type"`
+		Status     string `json:"status"`
+	}
+	type mapEdge struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+		Type string `json:"type"`
+		Reason string `json:"reason"`
+	}
+	type mapData struct {
+		Nodes []mapNode `json:"nodes"`
+		Edges []mapEdge `json:"edges"`
+	}
+
+	data := mapData{}
+	for _, r := range repos {
+		data.Nodes = append(data.Nodes, mapNode{
+			Name: r.Name, Display: r.DisplayName, Summary: r.Summary,
+			FileCount: r.FileCount, SourceType: r.SourceType, Status: r.Status,
+		})
+	}
+	for _, l := range links {
+		data.Edges = append(data.Edges, mapEdge{
+			From: l.FromRepo, To: l.ToRepo, Type: l.LinkType, Reason: l.Reason,
+		})
+	}
+
+	b, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("marshaling data: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(b)), nil
+}
+

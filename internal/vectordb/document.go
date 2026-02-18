@@ -44,4 +44,5 @@ type SearchFilter struct {
 	Type     *DocumentType
 	FilePath *string
 	Language *string
+	RepoID   *string
 }

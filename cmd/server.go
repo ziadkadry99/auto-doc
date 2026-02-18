@@ -22,6 +22,7 @@ import (
 	"github.com/ziadkadry99/auto-doc/internal/importers"
 	"github.com/ziadkadry99/auto-doc/internal/notifications"
 	"github.com/ziadkadry99/auto-doc/internal/orgstructure"
+	"github.com/ziadkadry99/auto-doc/internal/registry"
 	"github.com/ziadkadry99/auto-doc/internal/server"
 	"github.com/ziadkadry99/auto-doc/internal/vectordb"
 )
@@ -147,6 +148,15 @@ func registerAllRoutes(srv *server.Server, database *db.DB, llmProvider interfac
 	slackHandler := bots.NewSlackHandler(botGateway, "")
 	teamsHandler := bots.NewTeamsHandler(botGateway)
 	bots.RegisterRoutes(r, slackHandler, teamsHandler)
+
+	// Repository Registry
+	repoStore := registry.NewStore(database)
+	registry.RegisterRoutes(r, registry.RoutesDeps{
+		Store:     repoStore,
+		VecStore:  store,
+		Tier:      config.QualityNormal,
+		OutputDir: srv.ServerConfig().DataDir,
+	})
 
 	_ = confStore
 	_ = orgStore

@@ -13,6 +13,7 @@ type FileAnalysis struct {
 	Dependencies []Dependency  `json:"dependencies,omitempty"`
 	KeyLogic     []string      `json:"key_logic,omitempty"`
 	ContentHash  string        `json:"content_hash"`
+	RepoID       string        `json:"repo_id,omitempty"`
 }
 
 // FunctionDoc describes a single function or method found in a file.

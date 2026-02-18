@@ -8,7 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ziadkadry99/auto-doc/internal/config"
+	"github.com/ziadkadry99/auto-doc/internal/flows"
 	"github.com/ziadkadry99/auto-doc/internal/llm"
+	"github.com/ziadkadry99/auto-doc/internal/registry"
 	"github.com/ziadkadry99/auto-doc/internal/site"
 	"github.com/ziadkadry99/auto-doc/internal/vectordb"
 )
@@ -25,6 +28,7 @@ func init() {
 	siteCmd.Flags().Int("port", 8080, "port for the local dev server")
 	siteCmd.Flags().Bool("open", false, "open browser automatically when serving")
 	siteCmd.Flags().String("output", "", "override output directory (defaults to {outputDir}/site)")
+	siteCmd.Flags().Bool("central", false, "generate a combined multi-repo site from all registered repositories")
 	rootCmd.AddCommand(siteCmd)
 }
 
@@ -34,11 +38,7 @@ func runSite(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Verify that docs have been generated.
-	docsDir := filepath.Join(cfg.OutputDir, "docs")
-	if _, err := os.Stat(docsDir); os.IsNotExist(err) {
-		return fmt.Errorf("docs directory not found at %s\nRun `autodoc generate` first to create documentation", docsDir)
-	}
+	central, _ := cmd.Flags().GetBool("central")
 
 	// Determine output directory.
 	outputDir, _ := cmd.Flags().GetString("output")
@@ -54,9 +54,22 @@ func runSite(cmd *cobra.Command, args []string) error {
 	if projectName == "." || projectName == "" {
 		projectName = "Documentation"
 	}
-	generator := site.NewSiteGenerator(docsDir, outputDir, projectName)
-	generator.LogoPath = cfg.Logo
-	pageCount, err := generator.Generate()
+
+	var pageCount int
+
+	if central {
+		pageCount, err = runCentralSite(cfg, outputDir, projectName)
+	} else {
+		// Verify that docs have been generated.
+		docsDir := filepath.Join(cfg.OutputDir, "docs")
+		if _, err := os.Stat(docsDir); os.IsNotExist(err) {
+			return fmt.Errorf("docs directory not found at %s\nRun `autodoc generate` first to create documentation", docsDir)
+		}
+
+		generator := site.NewSiteGenerator(docsDir, outputDir, projectName)
+		generator.LogoPath = cfg.Logo
+		pageCount, err = generator.Generate()
+	}
 	if err != nil {
 		return fmt.Errorf("generating site: %w", err)
 	}
@@ -104,4 +117,87 @@ func runSite(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// runCentralSite generates a combined multi-repo site from all registered repositories.
+func runCentralSite(cfg *config.Config, outputDir, projectName string) (int, error) {
+	ctx := context.Background()
+
+	// Open the central database.
+	database, err := openCentralDB(cfg)
+	if err != nil {
+		return 0, fmt.Errorf("opening central database: %w\nHave you registered any repos with `autodoc repo add`?", err)
+	}
+	defer database.Close()
+
+	// Load repos.
+	repoStore := registry.NewStore(database)
+	repos, err := repoStore.List(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("listing repos: %w", err)
+	}
+	if len(repos) == 0 {
+		return 0, fmt.Errorf("no repositories registered\nUse `autodoc repo add <name> --path <path>` to register repos first")
+	}
+
+	// Convert repos to site RepoInfo.
+	siteRepos := make([]site.RepoInfo, len(repos))
+	for i, r := range repos {
+		docsDir := filepath.Join(r.LocalPath, ".autodoc", "docs")
+		if _, statErr := os.Stat(docsDir); os.IsNotExist(statErr) {
+			docsDir = "" // No docs available for this repo.
+		}
+		siteRepos[i] = site.RepoInfo{
+			Name:        r.Name,
+			DisplayName: r.DisplayName,
+			Summary:     r.Summary,
+			Status:      r.Status,
+			FileCount:   r.FileCount,
+			SourceType:  r.SourceType,
+			DocsDir:     docsDir,
+		}
+	}
+
+	// Load cross-service links.
+	links, err := repoStore.GetLinks(ctx, "")
+	if err != nil {
+		return 0, fmt.Errorf("loading links: %w", err)
+	}
+	siteLinks := make([]site.LinkInfo, len(links))
+	for i, l := range links {
+		siteLinks[i] = site.LinkInfo{
+			FromRepo:  l.FromRepo,
+			ToRepo:    l.ToRepo,
+			LinkType:  l.LinkType,
+			Reason:    l.Reason,
+			Endpoints: l.Endpoints,
+		}
+	}
+
+	// Load flows.
+	flowStore := flows.NewStore(database)
+	allFlows, _ := flowStore.ListFlows(ctx)
+	siteFlows := make([]site.FlowInfo, len(allFlows))
+	for i, f := range allFlows {
+		siteFlows[i] = site.FlowInfo{
+			Name:        f.Name,
+			Description: f.Description,
+			Narrative:   f.Narrative,
+			Diagram:     f.MermaidDiagram,
+			Services:    f.Services,
+		}
+	}
+
+	// Generate the combined site.
+	gen := &site.CentralSiteGenerator{
+		OutputDir:   outputDir,
+		ProjectName: projectName + " System",
+		Repos:       siteRepos,
+		Links:       siteLinks,
+		Flows:       siteFlows,
+		LogoPath:    cfg.Logo,
+	}
+
+	fmt.Printf("Generating central site for %d repositories...\n", len(repos))
+	return gen.Generate()
 }

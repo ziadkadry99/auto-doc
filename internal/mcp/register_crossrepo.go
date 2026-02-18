@@ -9,4 +9,8 @@ func (s *Server) registerCrossRepoTools() {
 	s.mcp.AddTool(askArchitectureTool, s.handleAskArchitecture)
 	s.mcp.AddTool(getTeamServicesTool, s.handleGetTeamServices)
 	s.mcp.AddTool(provideContextTool, s.handleProvideContext)
+	s.mcp.AddTool(listReposTool, s.handleListRepos)
+	s.mcp.AddTool(getRepoDetailsTool, s.handleGetRepoDetails)
+	s.mcp.AddTool(getSystemDiagramTool, s.handleGetSystemDiagram)
+	s.mcp.AddTool(getServiceMapDataTool, s.handleGetServiceMapData)
 }

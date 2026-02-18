@@ -9,6 +9,15 @@ import (
 	"github.com/ziadkadry99/auto-doc/internal/vectordb"
 )
 
+// ChunkAnalysisForRepo converts a FileAnalysis into vector store documents with a repo_id tag.
+func ChunkAnalysisForRepo(analysis *FileAnalysis, tier config.QualityTier, repoID string) []vectordb.Document {
+	docs := ChunkAnalysis(analysis, tier)
+	for i := range docs {
+		docs[i].Metadata.RepoID = repoID
+	}
+	return docs
+}
+
 // ChunkAnalysis converts a FileAnalysis into a set of vector store documents.
 func ChunkAnalysis(analysis *FileAnalysis, tier config.QualityTier) []vectordb.Document {
 	var docs []vectordb.Document

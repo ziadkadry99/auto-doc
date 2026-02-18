@@ -151,6 +151,11 @@ func (s *ChromemStore) DeleteByFilePath(ctx context.Context, filePath string) er
 	return s.collection.Delete(ctx, where, nil)
 }
 
+func (s *ChromemStore) DeleteByRepoID(ctx context.Context, repoID string) error {
+	where := map[string]string{"repo_id": repoID}
+	return s.collection.Delete(ctx, where, nil)
+}
+
 func (s *ChromemStore) Persist(ctx context.Context, dir string) error {
 	return s.db.ExportToFile(dir+"/chromem.gob.gz", true, "")
 }
@@ -224,6 +229,9 @@ func buildWhereClause(filter *SearchFilter) map[string]string {
 	}
 	if filter.Language != nil {
 		where["language"] = *filter.Language
+	}
+	if filter.RepoID != nil {
+		where["repo_id"] = *filter.RepoID
 	}
 
 	if len(where) == 0 {

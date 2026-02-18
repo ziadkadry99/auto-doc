@@ -249,4 +249,36 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     expires_at DATETIME,
     last_used DATETIME
 );
+
+CREATE TABLE IF NOT EXISTS repositories (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL DEFAULT '',
+    source_type TEXT NOT NULL DEFAULT 'local' CHECK(source_type IN ('local','git')),
+    source_url TEXT NOT NULL DEFAULT '',
+    local_path TEXT NOT NULL,
+    last_commit_sha TEXT NOT NULL DEFAULT '',
+    last_indexed_at TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','indexing','ready','error')),
+    file_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_repositories_name ON repositories(name);
+CREATE INDEX IF NOT EXISTS idx_repositories_status ON repositories(status);
+
+CREATE TABLE IF NOT EXISTS service_links (
+    id TEXT PRIMARY KEY,
+    from_repo TEXT NOT NULL,
+    to_repo TEXT NOT NULL,
+    link_type TEXT NOT NULL DEFAULT 'http',
+    reason TEXT NOT NULL DEFAULT '',
+    endpoints TEXT NOT NULL DEFAULT '[]',
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(from_repo, to_repo, link_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_links_from ON service_links(from_repo);
+CREATE INDEX IF NOT EXISTS idx_service_links_to ON service_links(to_repo);
 `
