@@ -3,6 +3,7 @@ package site
 import (
 	"bytes"
 	"fmt"
+	stdhtml "html"
 	"html/template"
 	"os"
 	"path/filepath"
@@ -263,6 +264,9 @@ func postProcessMermaid(html string) string {
 		endIdx += idx
 
 		mermaidContent := html[idx+len(openTag) : endIdx]
+		// The markdown renderer HTML-escapes content inside code blocks
+		// (e.g., --> becomes --&gt;). Mermaid.js needs raw text, so unescape.
+		mermaidContent = stdhtml.UnescapeString(mermaidContent)
 		replacement := `<div class="mermaid">` + mermaidContent + `</div>`
 		html = html[:idx] + replacement + html[endIdx+len(closeTag):]
 	}
