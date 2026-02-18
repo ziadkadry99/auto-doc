@@ -27,6 +27,7 @@ var updateCmd = &cobra.Command{
 
 func init() {
 	updateCmd.Flags().Bool("force", false, "skip git diff and re-process all files")
+	updateCmd.Flags().Bool("diagrams-only", false, "only regenerate architecture diagrams without re-analyzing files")
 	updateCmd.Flags().Int("concurrency", 0, "max parallel LLM calls (overrides config)")
 	rootCmd.AddCommand(updateCmd)
 }
@@ -48,6 +49,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	force, _ := cmd.Flags().GetBool("force")
+	diagramsOnly, _ := cmd.Flags().GetBool("diagrams-only")
 
 	rootDir, err := os.Getwd()
 	if err != nil {
@@ -64,6 +66,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if state.LastCommitSHA == "" && len(state.FileHashes) == 0 {
 		fmt.Println("No existing index found. Run `autodoc generate` first to create the initial index.")
 		return nil
+	}
+
+	// Diagrams-only mode: skip all file analysis, just regenerate high-level docs.
+	if diagramsOnly {
+		return runDiagramsOnly(ctx, cfg, rootDir)
 	}
 
 	// Load stored analyses for dependency expansion.
@@ -368,6 +375,58 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "  - %v\n", e)
 		}
 	}
+
+	return nil
+}
+
+// runDiagramsOnly regenerates only the architecture diagrams using cached
+// file analyses, without re-analyzing any files or updating the vector store.
+func runDiagramsOnly(ctx context.Context, cfg *config.Config, rootDir string) error {
+	start := time.Now()
+
+	fmt.Println("Diagrams-only mode: regenerating architecture diagrams from cached analyses...")
+
+	// Load existing file analyses.
+	storedAnalyses, err := indexer.LoadAnalyses(rootDir)
+	if err != nil {
+		return fmt.Errorf("loading analyses cache: %w (run `autodoc generate` first)", err)
+	}
+	if len(storedAnalyses) == 0 {
+		return fmt.Errorf("no cached analyses found; run `autodoc generate` first")
+	}
+
+	// Convert map to slice.
+	allDocs := make([]indexer.FileAnalysis, 0, len(storedAnalyses))
+	for _, a := range storedAnalyses {
+		allDocs = append(allDocs, a)
+	}
+
+	// Initialize LLM provider.
+	llmProvider, err := llm.NewProvider(string(cfg.Provider), cfg.Model)
+	if err != nil {
+		return fmt.Errorf("creating LLM provider: %w", err)
+	}
+
+	docGen := docs.NewDocGenerator(cfg.OutputDir)
+
+	// Regenerate enhanced index (includes architecture diagram).
+	fmt.Println("Regenerating project overview, features & component map...")
+	if err := docGen.GenerateEnhancedIndex(ctx, allDocs, llmProvider, cfg.Model); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: enhanced index regeneration failed: %v\n", err)
+	}
+
+	// Regenerate architecture overview.
+	if cfg.Quality != config.QualityLite {
+		fmt.Println("Regenerating architecture overview...")
+		if err := docGen.GenerateArchitecture(ctx, allDocs, llmProvider, cfg.Model); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: architecture regeneration failed: %v\n", err)
+		}
+	}
+
+	duration := time.Since(start)
+	fmt.Printf("\nDiagrams regenerated in %s\n", duration.Round(time.Millisecond))
+	fmt.Printf("  Files used:    %d cached analyses\n", len(allDocs))
+	fmt.Printf("  Output:        %s\n", cfg.OutputDir)
 
 	return nil
 }

@@ -7,6 +7,10 @@ on:
         description: "Force regeneration of all files"
         type: boolean
         default: false
+      regenerate_diagrams:
+        description: "Only regenerate architecture diagrams"
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -76,7 +80,15 @@ jobs:
           restore-keys: |
             autodoc-
 
+      - name: Regenerate diagrams only
+        if: inputs.regenerate_diagrams == true
+        run: ./autodoc update --diagrams-only --config .autodoc.ci.yml
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
       - name: Generate or update documentation
+        if: inputs.regenerate_diagrams != true
         run: |
           if [ "${{ inputs.force_regenerate }}" = "true" ]; then
             echo "Force regenerate — re-processing all files"

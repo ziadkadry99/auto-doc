@@ -136,17 +136,29 @@ List design patterns used, one per line.`, summary.String(), depSummary.String()
 	// Build architecture diagram from parsed components and service dependencies.
 	if len(data.Components) > 1 {
 		rels := parseServiceDependencies(data.ServiceDependencies, data.Components)
-		// Fallback: if no relationships were parsed, create minimal links
-		// based on adjacency so the diagram isn't disconnected.
+		// Fallback: if no relationships were parsed, connect all components
+		// to a central "Core" node in a star pattern instead of a linear chain.
 		if len(rels) == 0 {
-			for i := 0; i < len(data.Components)-1; i++ {
-				rels = append(rels, diagrams.Relationship{
-					From: data.Components[i].Name,
-					To:   data.Components[i+1].Name,
-				})
+			coreComp := diagrams.Component{Name: "Core", Description: "Central hub"}
+			data.Components = append(data.Components, coreComp)
+			for _, c := range data.Components {
+				if c.Name == "Core" {
+					continue
+				}
+				rels = append(rels, diagrams.Relationship{From: c.Name, To: "Core"})
 			}
 		}
-		data.ArchDiagram = diagrams.ArchitectureDiagram(data.Components, rels)
+		diagram := diagrams.ArchitectureDiagram(data.Components, rels)
+		if isMermaidDiagramValid(diagram) {
+			data.ArchDiagram = diagram
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: programmatic architecture diagram too complex; simplifying\n")
+			// Simplify: keep only the first 15 components and their relationships.
+			if len(data.Components) > 15 {
+				data.Components = data.Components[:15]
+			}
+			data.ArchDiagram = diagrams.ArchitectureDiagram(data.Components, rels)
+		}
 	}
 
 	tmpl, err := template.New("arch").Parse(architectureTemplate)
