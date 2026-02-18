@@ -17,6 +17,7 @@ const (
 	ProviderOpenAI    ProviderType = "openai"
 	ProviderGoogle    ProviderType = "google"
 	ProviderOllama    ProviderType = "ollama"
+	ProviderMiniMax   ProviderType = "minimax"
 )
 
 // Config is the top-level autodoc configuration, corresponding to .autodoc.yml.

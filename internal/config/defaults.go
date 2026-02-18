@@ -28,6 +28,11 @@ var qualityPresets = map[ProviderType]map[QualityTier]QualityPreset{
 		QualityNormal: {Model: "llama3", EmbeddingModel: "nomic-embed-text"},
 		QualityMax:    {Model: "llama3:70b", EmbeddingModel: "nomic-embed-text"},
 	},
+	ProviderMiniMax: {
+		QualityLite:   {Model: "MiniMax-M2.5-highspeed", EmbeddingModel: "text-embedding-3-small"},
+		QualityNormal: {Model: "MiniMax-M2.5", EmbeddingModel: "text-embedding-3-small"},
+		QualityMax:    {Model: "MiniMax-M2.5", EmbeddingModel: "text-embedding-3-large"},
+	},
 }
 
 // DefaultExcludes are glob patterns excluded from analysis by default.

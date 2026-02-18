@@ -26,6 +26,7 @@ type Credentials struct {
 	Google    *GoogleCredentials `json:"google,omitempty"`
 	Anthropic *APIKeyCredentials `json:"anthropic,omitempty"`
 	OpenAI    *APIKeyCredentials `json:"openai,omitempty"`
+	MiniMax   *APIKeyCredentials `json:"minimax,omitempty"`
 }
 
 // CredentialPath returns the path to the credentials file (~/.autodoc/credentials.json).
@@ -100,6 +101,10 @@ func GetAPIKey(provider string) string {
 		if key := os.Getenv("GOOGLE_API_KEY"); key != "" {
 			return key
 		}
+	case "minimax":
+		if key := os.Getenv("MINIMAX_API_KEY"); key != "" {
+			return key
+		}
 	}
 
 	// Priority 2: Stored credentials.
@@ -121,6 +126,10 @@ func GetAPIKey(provider string) string {
 		// For Google, API key auth is separate from OAuth.
 		// This only returns the API key, not OAuth tokens.
 		return ""
+	case "minimax":
+		if creds.MiniMax != nil {
+			return creds.MiniMax.APIKey
+		}
 	}
 
 	return ""

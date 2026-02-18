@@ -46,6 +46,13 @@ func NewProvider(providerType string, model string) (Provider, error) {
 		}
 		return NewOllamaProvider(host, model), nil
 
+	case "minimax":
+		apiKey := auth.GetAPIKey("minimax")
+		if apiKey == "" {
+			return nil, fmt.Errorf("MiniMax API key not found.\nRun `autodoc auth minimax` or set MINIMAX_API_KEY")
+		}
+		return NewMinimaxProvider(apiKey, model), nil
+
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}

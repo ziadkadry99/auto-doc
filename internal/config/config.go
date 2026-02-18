@@ -61,6 +61,7 @@ var validProviders = map[ProviderType]bool{
 	ProviderOpenAI:    true,
 	ProviderGoogle:    true,
 	ProviderOllama:    true,
+	ProviderMiniMax:   true,
 }
 
 // validQualityTiers is the set of recognized quality tier values.
@@ -76,7 +77,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("provider is required")
 	}
 	if !validProviders[c.Provider] {
-		return fmt.Errorf("invalid provider %q: must be one of anthropic, openai, google, ollama", c.Provider)
+		return fmt.Errorf("invalid provider %q: must be one of anthropic, openai, google, ollama, minimax", c.Provider)
 	}
 
 	if c.Model == "" {
@@ -116,6 +117,8 @@ func APIKeyEnvVar(provider ProviderType) string {
 		return "OPENAI_API_KEY"
 	case ProviderGoogle:
 		return "GOOGLE_API_KEY"
+	case ProviderMiniMax:
+		return "MINIMAX_API_KEY"
 	default:
 		return ""
 	}
