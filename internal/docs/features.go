@@ -146,6 +146,10 @@ Only output the Mermaid code, no fences.`, contextSection, summary.String())
 	data := parseEnhancedIndexResponse(resp.Content)
 	data.ProjectName = projectNameFromWd(g.OutputDir)
 	data.Analyses = analyses
+	if data.ArchDiagram == "" || !isMermaidDiagramValid(data.ArchDiagram) {
+		fmt.Fprintf(os.Stderr, "Warning: invalid architecture mermaid from LLM; using fallback diagram\n")
+		data.ArchDiagram = fallbackArchitectureDiagram(data.Features, analyses)
+	}
 
 	// Build dependency diagram from file analyses.
 	depMap := make(map[string][]string)
@@ -448,12 +452,46 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 // It sanitizes node IDs (removing &, #, etc.) and quotes labels containing
 // special characters.
 func sanitizeMermaid(diagram string) string {
-	var out strings.Builder
-	for _, line := range strings.Split(diagram, "\n") {
-		out.WriteString(sanitizeMermaidLine(line))
-		out.WriteString("\n")
+	var out []string
+	hasHeader := false
+	subgraphDepth := 0
+	for _, rawLine := range strings.Split(diagram, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "```") {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "graph ") || strings.HasPrefix(line, "flowchart "):
+			if !hasHeader {
+				out = append(out, line)
+				hasHeader = true
+			}
+		case strings.HasPrefix(line, "%%"):
+			out = append(out, line)
+		case strings.HasPrefix(line, "subgraph "):
+			out = append(out, line)
+			subgraphDepth++
+		case line == "end" || line == "en":
+			if subgraphDepth > 0 {
+				out = append(out, "end")
+				subgraphDepth--
+			}
+		case strings.HasPrefix(line, "classDef ") || strings.HasPrefix(line, "class ") || strings.HasPrefix(line, "style "):
+			out = append(out, line)
+		default:
+			if fixed := sanitizeMermaidLine(rawLine); fixed != "" {
+				out = append(out, fixed)
+			}
+		}
 	}
-	return strings.TrimRight(out.String(), "\n")
+	for subgraphDepth > 0 {
+		out = append(out, "end")
+		subgraphDepth--
+	}
+	if !hasHeader {
+		out = append([]string{"graph TD"}, out...)
+	}
+	return strings.Join(out, "\n")
 }
 
 // mermaidNodeDef matches a node definition: ID["label"] or ID[label]
@@ -506,24 +544,173 @@ func sanitizeMermaidLine(line string) string {
 	// Node definition: ID[label] or ID["label"]
 	if m := mermaidNodeDef.FindStringSubmatch(line); m != nil {
 		indent, id, rest := m[1], m[2], m[3]
-		return indent + sanitizeMermaidID(id) + rest
+		normalized, ok := normalizeNodeRest(rest)
+		if !ok {
+			return ""
+		}
+		return indent + sanitizeMermaidID(id) + normalized
 	}
 
 	// Arrow line: ID --> ID  or  ID -->|label| ID
 	if m := mermaidArrow.FindStringSubmatch(line); m != nil {
 		indent, sourceID, rest := m[1], m[2], m[3]
-		// Also sanitize the target ID.
-		rest = mermaidArrowTarget.ReplaceAllStringFunc(rest, func(s string) string {
-			tm := mermaidArrowTarget.FindStringSubmatch(s)
-			if tm == nil {
-				return s
+		tm := mermaidArrowTarget.FindStringSubmatch(rest)
+		if tm == nil {
+			return ""
+		}
+		arrow := strings.TrimSpace(tm[1])
+		targetID := sanitizeMermaidID(tm[2])
+		suffix := strings.TrimSpace(tm[3])
+		if strings.HasPrefix(suffix, ":::") {
+			parts := strings.Fields(suffix)
+			if len(parts) > 0 {
+				suffix = parts[0]
+			} else {
+				suffix = ""
 			}
-			return tm[1] + sanitizeMermaidID(tm[2]) + tm[3]
-		})
-		return indent + sanitizeMermaidID(sourceID) + rest
+		} else {
+			suffix = ""
+		}
+		return fmt.Sprintf("%s%s %s %s%s", indent, sanitizeMermaidID(sourceID), arrow, targetID, suffix)
 	}
 
-	return line
+	return ""
+}
+
+func normalizeNodeRest(rest string) (string, bool) {
+	start := strings.Index(rest, "[")
+	if start < 0 {
+		return "", false
+	}
+	depth := 0
+	end := -1
+	for i, r := range rest[start:] {
+		switch r {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				end = start + i
+				break
+			}
+		}
+	}
+	if end < 0 {
+		return "", false
+	}
+
+	label := strings.TrimSpace(rest[start+1 : end])
+	if len(label) >= 2 && strings.HasPrefix(label, "\"") && strings.HasSuffix(label, "\"") {
+		label = strings.TrimPrefix(strings.TrimSuffix(label, "\""), "\"")
+	}
+	suffix := strings.TrimSpace(rest[end+1:])
+	if strings.HasPrefix(suffix, ":::") {
+		parts := strings.Fields(suffix)
+		if len(parts) > 0 {
+			suffix = parts[0]
+		} else {
+			suffix = ""
+		}
+	} else {
+		suffix = ""
+	}
+	return fmt.Sprintf("[\"%s\"]%s", escapeMermaidLabel(label), suffix), true
+}
+
+func escapeMermaidLabel(s string) string {
+	s = strings.ReplaceAll(s, "\"", "#quot;")
+	s = strings.ReplaceAll(s, "(", "#lpar;")
+	s = strings.ReplaceAll(s, ")", "#rpar;")
+	s = strings.ReplaceAll(s, "[", "#lsqb;")
+	s = strings.ReplaceAll(s, "]", "#rsqb;")
+	s = strings.ReplaceAll(s, "{", "#lbrace;")
+	s = strings.ReplaceAll(s, "}", "#rbrace;")
+	s = strings.ReplaceAll(s, "<", "#lt;")
+	s = strings.ReplaceAll(s, ">", "#gt;")
+	return s
+}
+
+func isMermaidDiagramValid(diagram string) bool {
+	hasHeader := false
+	subgraphDepth := 0
+	statementCount := 0
+	for _, line := range strings.Split(diagram, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "%%") {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "graph ") || strings.HasPrefix(trimmed, "flowchart "):
+			hasHeader = true
+		case strings.HasPrefix(trimmed, "subgraph "):
+			subgraphDepth++
+		case trimmed == "end":
+			if subgraphDepth == 0 {
+				return false
+			}
+			subgraphDepth--
+		case strings.HasPrefix(trimmed, "classDef ") || strings.HasPrefix(trimmed, "class ") || strings.HasPrefix(trimmed, "style "):
+			continue
+		default:
+			if sanitizeMermaidLine(trimmed) == "" {
+				return false
+			}
+			statementCount++
+		}
+	}
+	return hasHeader && subgraphDepth == 0 && statementCount > 0
+}
+
+func fallbackArchitectureDiagram(features []Feature, analyses []indexer.FileAnalysis) string {
+	if len(features) == 0 {
+		return "graph TD\n    Project[\"Project\"]"
+	}
+
+	components := make([]diagrams.Component, 0, len(features)+1)
+	components = append(components, diagrams.Component{
+		Name:        "Project",
+		Description: "Generated fallback architecture map",
+	})
+
+	fileToFeature := make(map[string]string, len(analyses))
+	for _, feat := range features {
+		components = append(components, diagrams.Component{
+			Name:        feat.Name,
+			Description: feat.Description,
+		})
+		for _, fp := range feat.Files {
+			fileToFeature[fp] = feat.Name
+		}
+	}
+
+	seen := make(map[string]bool)
+	relationships := make([]diagrams.Relationship, 0, len(features))
+	for _, a := range analyses {
+		fromFeat, ok := fileToFeature[a.FilePath]
+		if !ok {
+			continue
+		}
+		for _, d := range a.Dependencies {
+			toFeat, ok := fileToFeature[d.Name]
+			if !ok || toFeat == fromFeat {
+				continue
+			}
+			key := fromFeat + "->" + toFeat
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			relationships = append(relationships, diagrams.Relationship{From: fromFeat, To: toFeat})
+		}
+	}
+
+	if len(relationships) == 0 {
+		for _, feat := range features {
+			relationships = append(relationships, diagrams.Relationship{From: "Project", To: feat.Name})
+		}
+	}
+	return diagrams.ArchitectureDiagram(components, relationships)
 }
 
 // generateFeatureDetails makes concurrent LLM calls to produce a detailed
