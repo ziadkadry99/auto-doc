@@ -41,8 +41,8 @@ jobs:
       - name: Create CI config
         run: |
           cat > .autodoc.ci.yml <<'EOF'
-          provider: google
-          model: gemini-2.5-flash
+          provider: anthropic
+          model: claude-sonnet-4-6
           embedding_provider: google
           embedding_model: gemini-embedding-001
           quality: max
@@ -67,7 +67,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .autodoc
-          key: autodoc-${{ hashFiles('**/*.go', 'go.mod', 'go.sum') }}
+          key: autodoc-${{ hashFiles('**/*.go', 'go.mod', 'go.sum', '.github/workflows/pages.yml') }}
           restore-keys: |
             autodoc-
 
@@ -85,6 +85,7 @@ jobs:
             ./autodoc generate --config .autodoc.ci.yml
           fi
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
       - name: Generate static site
