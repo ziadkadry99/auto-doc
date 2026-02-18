@@ -991,22 +991,26 @@ const jsContent = `(function() {
     // Re-render Mermaid diagrams with the new theme
     if (typeof mermaid !== "undefined") {
       mermaid.initialize({ startOnLoad: false, theme: theme === "dark" ? "dark" : "default", securityLevel: "loose" });
-      document.querySelectorAll(".mermaid").forEach(function(el) {
+      var reRenderPromises = [];
+      document.querySelectorAll(".mermaid").forEach(function(el, idx) {
         var src = el.getAttribute("data-source");
         if (src) {
           el.removeAttribute("data-processed");
           el.removeAttribute("data-panzoom");
-          // Remove old controls before re-rendering
           var oldControls = el.querySelector(".mermaid-controls");
           if (oldControls) oldControls.remove();
-          el.textContent = src;
+          reRenderPromises.push(
+            mermaid.render("mermaid-theme-" + idx, src).then(function(result) {
+              el.innerHTML = result.svg;
+            })
+          );
         }
       });
-      mermaid.run({ querySelector: ".mermaid" });
-      // Re-apply pan/zoom after Mermaid re-renders SVGs.
-      if (typeof setupMermaidPanZoom === "function") {
-        setTimeout(setupMermaidPanZoom, 500);
-      }
+      Promise.all(reRenderPromises).then(function() {
+        if (typeof setupMermaidPanZoom === "function") {
+          setupMermaidPanZoom();
+        }
+      });
     }
   }
 
@@ -1415,26 +1419,38 @@ const jsContent = `(function() {
 
   // ===== Mermaid initialization =====
   if (typeof mermaid !== "undefined") {
-    // Convert <pre><code class="language-mermaid"> blocks into <div class="mermaid">.
-    // Using textContent from code elements automatically decodes HTML entities
-    // (e.g., &gt; back to >) so mermaid gets clean syntax.
-    document.querySelectorAll("pre > code.language-mermaid").forEach(function(code) {
-      var pre = code.parentElement;
-      var div = document.createElement("div");
-      div.className = "mermaid";
-      div.setAttribute("data-source", code.textContent);
-      div.textContent = code.textContent;
-      pre.parentElement.replaceChild(div, pre);
-    });
     var isDark = html.getAttribute("data-theme") === "dark";
     mermaid.initialize({
       startOnLoad: false,
       theme: isDark ? "dark" : "default",
       securityLevel: "loose"
     });
-    mermaid.run({ querySelector: ".mermaid" });
-    // Set up pan/zoom after Mermaid renders SVGs.
-    setTimeout(setupMermaidPanZoom, 500);
+    // Convert <pre><code class="language-mermaid"> to rendered mermaid diagrams.
+    // Use mermaid.render() with the source text directly as a string to avoid
+    // any DOM HTML encoding/decoding issues with arrows (-->) and entities.
+    var mermaidBlocks = document.querySelectorAll("pre > code.language-mermaid");
+    var renderPromises = [];
+    mermaidBlocks.forEach(function(code, idx) {
+      var pre = code.parentElement;
+      var source = code.textContent;
+      var div = document.createElement("div");
+      div.className = "mermaid";
+      div.setAttribute("data-source", source);
+      pre.parentElement.replaceChild(div, pre);
+      renderPromises.push(
+        mermaid.render("mermaid-diagram-" + idx, source).then(function(result) {
+          div.innerHTML = result.svg;
+        }).catch(function(err) {
+          div.innerHTML = '<pre style="color:red;">Mermaid error: ' + err.message + '</pre>';
+        })
+      );
+    });
+    // Set up pan/zoom after all diagrams render.
+    Promise.all(renderPromises).then(function() {
+      if (typeof setupMermaidPanZoom === "function") {
+        setupMermaidPanZoom();
+      }
+    });
   }
 })();
 `

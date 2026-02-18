@@ -42,7 +42,7 @@ jobs:
         run: |
           cat > .autodoc.ci.yml <<'EOF'
           provider: google
-          model: gemini-2.0-flash
+          model: gemini-2.5-flash
           embedding_provider: google
           embedding_model: gemini-embedding-001
           quality: normal
