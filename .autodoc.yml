@@ -1,7 +1,7 @@
 provider: google
-model: gemini-3-pro-preview
-embedding_provider: ollama
-embedding_model: nomic-embed-text
+model: gemini-2.5-flash
+embedding_provider: google
+embedding_model: gemini-embedding-001
 quality: max
 output_dir: .autodoc
 include:
