@@ -2,6 +2,11 @@ name: Deploy Docs to GitHub Pages
 
 on:
   workflow_dispatch:
+    inputs:
+      force_regenerate:
+        description: "Force regeneration of all files"
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -73,7 +78,10 @@ jobs:
 
       - name: Generate or update documentation
         run: |
-          if [ -d ".autodoc/docs" ] && [ -f ".autodoc/state.json" ]; then
+          if [ "${{ inputs.force_regenerate }}" = "true" ]; then
+            echo "Force regenerate — re-processing all files"
+            ./autodoc update --force --config .autodoc.ci.yml
+          elif [ -d ".autodoc/docs" ] && [ -f ".autodoc/state.json" ]; then
             echo "Cache found — running incremental update"
             ./autodoc update --config .autodoc.ci.yml || {
               echo "Update failed — falling back to full generate"
