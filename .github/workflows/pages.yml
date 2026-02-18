@@ -46,8 +46,8 @@ jobs:
       - name: Create CI config
         run: |
           cat > .autodoc.ci.yml <<'EOF'
-          provider: minimax
-          model: MiniMax-M2.5
+          provider: openrouter
+          model: minimax/minimax-m2.5
           embedding_provider: google
           embedding_model: gemini-embedding-001
           quality: max
@@ -93,7 +93,7 @@ jobs:
             ./autodoc generate --config .autodoc.ci.yml
           fi
         env:
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
       - name: Generate static site

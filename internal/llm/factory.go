@@ -53,6 +53,13 @@ func NewProvider(providerType string, model string) (Provider, error) {
 		}
 		return NewMinimaxProvider(apiKey, model), nil
 
+	case "openrouter":
+		apiKey := auth.GetAPIKey("openrouter")
+		if apiKey == "" {
+			return nil, fmt.Errorf("OpenRouter API key not found.\nRun `autodoc auth openrouter` or set OPENROUTER_API_KEY")
+		}
+		return NewOpenRouterProvider(apiKey, model), nil
+
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}

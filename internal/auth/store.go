@@ -26,7 +26,8 @@ type Credentials struct {
 	Google    *GoogleCredentials `json:"google,omitempty"`
 	Anthropic *APIKeyCredentials `json:"anthropic,omitempty"`
 	OpenAI    *APIKeyCredentials `json:"openai,omitempty"`
-	MiniMax   *APIKeyCredentials `json:"minimax,omitempty"`
+	MiniMax    *APIKeyCredentials `json:"minimax,omitempty"`
+	OpenRouter *APIKeyCredentials `json:"openrouter,omitempty"`
 }
 
 // CredentialPath returns the path to the credentials file (~/.autodoc/credentials.json).
@@ -105,6 +106,10 @@ func GetAPIKey(provider string) string {
 		if key := os.Getenv("MINIMAX_API_KEY"); key != "" {
 			return key
 		}
+	case "openrouter":
+		if key := os.Getenv("OPENROUTER_API_KEY"); key != "" {
+			return key
+		}
 	}
 
 	// Priority 2: Stored credentials.
@@ -129,6 +134,10 @@ func GetAPIKey(provider string) string {
 	case "minimax":
 		if creds.MiniMax != nil {
 			return creds.MiniMax.APIKey
+		}
+	case "openrouter":
+		if creds.OpenRouter != nil {
+			return creds.OpenRouter.APIKey
 		}
 	}
 

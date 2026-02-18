@@ -60,6 +60,15 @@ Get your API key at https://platform.minimaxi.com/user-center/basic-information/
 	RunE: runAuthMinimax,
 }
 
+var authOpenRouterCmd = &cobra.Command{
+	Use:   "openrouter",
+	Short: "Store OpenRouter API key",
+	Long: `Store your OpenRouter API key for persistent use.
+
+Get your API key at https://openrouter.ai/settings/keys`,
+	RunE: runAuthOpenRouter,
+}
+
 var authStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show which providers have stored credentials",
@@ -72,7 +81,7 @@ var authLogoutCmd = &cobra.Command{
 	Long: `Remove stored credentials for a provider.
 
 If no provider is specified, removes all stored credentials.
-Valid providers: google, anthropic, openai, minimax`,
+Valid providers: google, anthropic, openai, minimax, openrouter`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runAuthLogout,
 }
@@ -83,6 +92,7 @@ func init() {
 	authCmd.AddCommand(authAnthropicCmd)
 	authCmd.AddCommand(authOpenAICmd)
 	authCmd.AddCommand(authMinimaxCmd)
+	authCmd.AddCommand(authOpenRouterCmd)
 	authCmd.AddCommand(authStatusCmd)
 	authCmd.AddCommand(authLogoutCmd)
 }
@@ -219,6 +229,30 @@ func runAuthMinimax(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runAuthOpenRouter(cmd *cobra.Command, args []string) error {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("OpenRouter API key: ")
+	input, _ := reader.ReadString('\n')
+	apiKey := strings.TrimSpace(input)
+	if apiKey == "" {
+		return fmt.Errorf("API key is required")
+	}
+
+	creds, err := auth.Load()
+	if err != nil {
+		return fmt.Errorf("loading credentials: %w", err)
+	}
+
+	creds.OpenRouter = &auth.APIKeyCredentials{APIKey: apiKey}
+
+	if err := auth.Save(creds); err != nil {
+		return fmt.Errorf("saving credentials: %w", err)
+	}
+
+	fmt.Println("OpenRouter credentials stored successfully!")
+	return nil
+}
+
 func runAuthStatus(cmd *cobra.Command, args []string) error {
 	creds, err := auth.Load()
 	if err != nil {
@@ -267,6 +301,15 @@ func runAuthStatus(cmd *cobra.Command, args []string) error {
 		fmt.Println("minimax      not configured")
 	}
 
+	// OpenRouter
+	if env := os.Getenv("OPENROUTER_API_KEY"); env != "" {
+		fmt.Println("openrouter   configured (env var)")
+	} else if creds.OpenRouter != nil && creds.OpenRouter.APIKey != "" {
+		fmt.Println("openrouter   configured (stored)")
+	} else {
+		fmt.Println("openrouter   not configured")
+	}
+
 	// Ollama (always available locally)
 	fmt.Println("ollama       available (local)")
 
@@ -297,8 +340,11 @@ func runAuthLogout(cmd *cobra.Command, args []string) error {
 		case "minimax":
 			creds.MiniMax = nil
 			fmt.Println("MiniMax credentials removed.")
+		case "openrouter":
+			creds.OpenRouter = nil
+			fmt.Println("OpenRouter credentials removed.")
 		default:
-			return fmt.Errorf("unknown provider %q (valid: google, anthropic, openai, minimax)", args[0])
+			return fmt.Errorf("unknown provider %q (valid: google, anthropic, openai, minimax, openrouter)", args[0])
 		}
 	}
 
