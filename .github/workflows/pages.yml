@@ -45,7 +45,7 @@ jobs:
           model: gemini-2.5-flash
           embedding_provider: google
           embedding_model: gemini-embedding-001
-          quality: normal
+          quality: max
           output_dir: .autodoc
           include:
             - "**/*"
