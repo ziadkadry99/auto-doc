@@ -112,11 +112,10 @@ The JSON must follow this exact schema:
 {"nodes":[{"id":"unique_id","label":"Short Name","desc":"Brief description","group":"LayerName"}],"edges":[{"from":"source_id","to":"target_id","label":"optional relationship"}]}
 
 Guidelines:
-- Use 4-8 nodes maximum. Combine related things into logical architectural layers (e.g. "User Interface" not individual CLI commands).
-- Group nodes into meaningful architectural layers like "Presentation", "Processing", "Data", "External" — use whatever layer names make sense for THIS project.
+- Include every component that matters architecturally. Do not limit or cap the number of nodes.
+- Group nodes into meaningful architectural layers — use whatever layer names make sense for THIS project.
 - Edges should represent actual data flow or control flow, not just "these exist together". Label edges with what flows between them (e.g. "source files", "API requests", "embeddings").
 - Think about what a senior engineer would draw to explain the system to a new team member.
-- Do NOT just list every module as a separate box. Abstract into architectural concepts.
 - Node IDs must use only alphanumerics and underscores.
 
 Output ONLY the raw JSON on a single line, no markdown formatting, no code fences.`, summary.String(), depSummary.String())

@@ -128,7 +128,7 @@ The JSON must follow this exact schema:
 {"nodes":[{"id":"unique_id","label":"Short Name","desc":"Brief description","group":"LayerName"}],"edges":[{"from":"source_id","to":"target_id","label":"what flows between them"}]}
 
 Guidelines:
-- Use 4-8 nodes maximum. Each node should be an architectural concept (e.g. "User Interface", "Processing Pipeline"), NOT individual files or modules.
+- Include every component that matters architecturally. Do not limit or cap the number of nodes.
 - Group nodes into meaningful architectural layers — use whatever layer names make sense for THIS project.
 - Edges represent actual data flow or control flow. Label them with what flows between components (e.g. "source files", "API requests", "embeddings").
 - Think about what a senior engineer would draw to explain this system to a new team member.
@@ -480,9 +480,6 @@ func fallbackArchitectureDiagram(features []Feature) string {
 	}
 
 	feats := features
-	if len(feats) > 8 {
-		feats = feats[:8]
-	}
 
 	var data diagrams.DiagramData
 	for _, feat := range feats {
