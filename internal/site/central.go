@@ -268,7 +268,7 @@ func (g *CentralSiteGenerator) writeSystemOverview(stagingDir string) error {
 			}
 			for extName := range externalNodes {
 				nodeID := strings.ReplaceAll(extName, "-", "_")
-				b.WriteString(fmt.Sprintf("    %s([(\"%s\")])\n", nodeID, extName))
+				b.WriteString(fmt.Sprintf("    %s[(\"%s\")]\n", nodeID, extName))
 			}
 		}
 		// Define links between services.
