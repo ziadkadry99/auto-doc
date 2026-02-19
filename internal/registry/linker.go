@@ -212,7 +212,9 @@ Rules:
 - The "from" field is the service that initiates the call
 - The "to" field is the service that receives the call
 - If no dependencies are found, return empty arrays
-- Be conservative: only report clear dependencies, not speculative ones`
+- Be conservative: only report clear dependencies, not speculative ones
+- IMPORTANT: Proto/gRPC stub files (e.g., *_pb2_grpc.py, *.pb.go, *Grpc.java) contain client stubs for ALL services defined in the proto. Do NOT treat the presence of a stub as evidence that this service calls the other service. Only count it as a dependency if the service's own application code actually creates a client and makes calls to that service.
+- Service names in dependencies MUST match the registered service names exactly (e.g., use "checkoutservice" not "CheckoutService")`
 
 func buildLinkDiscoveryPrompt(newRepo *Repository, allRepos []Repository, analyses map[string]indexer.FileAnalysis, calls []flows.CrossServiceCall, _ *flows.Detector) string {
 	var b strings.Builder

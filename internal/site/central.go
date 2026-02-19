@@ -52,6 +52,9 @@ type CentralSiteGenerator struct {
 // It creates a staging docs directory with generated content and per-repo docs,
 // then delegates to the standard SiteGenerator for HTML rendering.
 func (g *CentralSiteGenerator) Generate() (int, error) {
+	// Normalize links and flows before generating.
+	g.normalizeData()
+
 	// Create staging docs directory.
 	stagingDir := filepath.Join(g.OutputDir, ".staging-docs")
 	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
@@ -732,6 +735,102 @@ func copyDir(src, dst string) error {
 
 		return copyFile(path, destPath)
 	})
+}
+
+// normalizeData cleans up links and flows before site generation:
+//   - Normalizes link FromRepo/ToRepo to match registered repo names (case-insensitive)
+//   - Removes self-loops (FromRepo == ToRepo)
+//   - Deduplicates links (same from/to pair)
+//   - Deduplicates flows by name
+func (g *CentralSiteGenerator) normalizeData() {
+	// Build case-insensitive lookup from registered repo names.
+	repoLookup := make(map[string]string) // lowercase -> actual name
+	for _, r := range g.Repos {
+		repoLookup[strings.ToLower(r.Name)] = r.Name
+	}
+
+	// Helper: try to match a link endpoint to a registered repo.
+	// Checks exact match, then case-insensitive, then with common suffixes stripped.
+	matchRepo := func(name string) string {
+		// Exact match.
+		if _, ok := repoLookup[strings.ToLower(name)]; ok {
+			return repoLookup[strings.ToLower(name)]
+		}
+		// Try stripping common suffixes like "Service", "Grpc", "Client".
+		lower := strings.ToLower(name)
+		for _, suffix := range []string{"service", "grpc", "client"} {
+			trimmed := strings.TrimSuffix(lower, suffix)
+			if trimmed != lower {
+				// Check if trimmed + "service" matches a repo.
+				if actual, ok := repoLookup[trimmed+"service"]; ok {
+					return actual
+				}
+				// Check if trimmed alone matches.
+				if actual, ok := repoLookup[trimmed]; ok {
+					return actual
+				}
+			}
+		}
+		return name // no match, keep as-is
+	}
+
+	// Normalize links.
+	seen := make(map[string]bool)
+	var cleanLinks []LinkInfo
+	for _, link := range g.Links {
+		link.FromRepo = matchRepo(link.FromRepo)
+		link.ToRepo = matchRepo(link.ToRepo)
+
+		// Skip self-loops.
+		if link.FromRepo == link.ToRepo {
+			continue
+		}
+
+		// Deduplicate by from+to pair.
+		key := link.FromRepo + "->" + link.ToRepo
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		cleanLinks = append(cleanLinks, link)
+	}
+
+	// Filter fan-out false positives: if a single service has outbound links
+	// to more than 60% of all other services, those links are likely from
+	// shared proto/interface stubs, not real dependencies.
+	if len(g.Repos) > 3 {
+		threshold := int(float64(len(g.Repos)-1) * 0.6)
+		outCount := make(map[string]int)
+		for _, link := range cleanLinks {
+			outCount[link.FromRepo]++
+		}
+		var filtered []LinkInfo
+		for _, link := range cleanLinks {
+			if outCount[link.FromRepo] > threshold {
+				continue // skip fan-out links
+			}
+			filtered = append(filtered, link)
+		}
+		cleanLinks = filtered
+	}
+
+	g.Links = cleanLinks
+
+	// Deduplicate flows by name (keep the one with the most services).
+	flowMap := make(map[string]int) // name -> index in deduped list
+	var cleanFlows []FlowInfo
+	for _, f := range g.Flows {
+		if idx, exists := flowMap[f.Name]; exists {
+			// Keep the one with more services.
+			if len(f.Services) > len(cleanFlows[idx].Services) {
+				cleanFlows[idx] = f
+			}
+			continue
+		}
+		flowMap[f.Name] = len(cleanFlows)
+		cleanFlows = append(cleanFlows, f)
+	}
+	g.Flows = cleanFlows
 }
 
 // copyFile copies a single file.

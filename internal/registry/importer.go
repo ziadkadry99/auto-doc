@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ziadkadry99/auto-doc/internal/config"
@@ -169,23 +170,67 @@ func generateRepoSummary(analyses map[string]indexer.FileAnalysis) string {
 		}
 	}
 
+	// Known entry-point file patterns (base names).
+	entryPoints := map[string]bool{
+		"main.go": true, "main.py": true, "app.py": true, "server.py": true,
+		"index.ts": true, "index.js": true, "server.js": true, "server.ts": true, "app.ts": true, "app.js": true,
+		"Program.cs": true, "Startup.cs": true,
+		"Main.java": true, "Application.java": true, "App.java": true,
+		"main.rs": true, "lib.rs": true,
+	}
+
 	// Find a file that looks like a main entry point for a summary.
 	for _, a := range analyses {
-		if a.Purpose != "" && (filepath.Base(a.FilePath) == "main.go" ||
-			filepath.Base(a.FilePath) == "index.ts" ||
-			filepath.Base(a.FilePath) == "app.py" ||
-			filepath.Base(a.FilePath) == "main.py") {
+		if a.Purpose != "" && entryPoints[filepath.Base(a.FilePath)] {
 			return a.Purpose
 		}
 	}
 
-	// Fallback: use first analysis summary found.
+	// Source code extensions for preferring code files over config files.
+	sourceExts := map[string]bool{
+		".go": true, ".py": true, ".js": true, ".ts": true, ".tsx": true, ".jsx": true,
+		".java": true, ".rs": true, ".rb": true, ".cs": true, ".cpp": true, ".c": true,
+		".swift": true, ".kt": true, ".scala": true, ".php": true,
+	}
+
+	// Try source files whose name contains "server", "service", "main", or "app".
 	for _, a := range analyses {
-		if a.Summary != "" {
-			return fmt.Sprintf("%s project with %d files (%s primary)", topLang, len(analyses), topLang)
+		if a.Purpose == "" {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(a.FilePath))
+		if !sourceExts[ext] {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(a.FilePath))
+		for _, keyword := range []string{"server", "service", "main", "app"} {
+			if strings.Contains(base, keyword) {
+				return a.Purpose
+			}
 		}
 	}
 
+	// Try any source code file with a non-empty Purpose.
+	for _, a := range analyses {
+		if a.Purpose == "" {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(a.FilePath))
+		if sourceExts[ext] {
+			return a.Purpose
+		}
+	}
+
+	// Last resort: use the first non-empty Purpose from any file.
+	for _, a := range analyses {
+		if a.Purpose != "" {
+			return a.Purpose
+		}
+	}
+
+	if topLang != "" {
+		return fmt.Sprintf("%s project with %d files", topLang, len(analyses))
+	}
 	return fmt.Sprintf("%d files indexed", len(analyses))
 }
 
