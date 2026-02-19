@@ -944,6 +944,61 @@ body {
   border-color: var(--accent);
 }
 
+/* Fullscreen overlay for architecture diagrams */
+.arch-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.arch-fullscreen-overlay .arch-fullscreen-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.arch-fullscreen-overlay .arch-fullscreen-toolbar button {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px 10px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.arch-fullscreen-overlay .arch-fullscreen-toolbar button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.arch-fullscreen-overlay .arch-fullscreen-body {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+}
+
+.arch-fullscreen-overlay .arch-fullscreen-body.panning {
+  cursor: grabbing;
+}
+
+.arch-fullscreen-overlay .arch-fullscreen-body svg {
+  width: 100%;
+  height: 100%;
+}
+
 /* ============ Responsive ============ */
 @media (max-width: 768px) {
   .sidebar {
@@ -1352,136 +1407,130 @@ const jsContent = `(function() {
   function escSvg(s) {
     return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
-  function truncSvg(s, max) {
-    return s.length > max ? s.substring(0, max - 1) + "\u2026" : s;
-  }
-  function renderArchDiagrams() {
-    document.querySelectorAll(".arch-diagram").forEach(function(container) {
-      var raw = container.getAttribute("data-graph");
-      if (!raw) return;
-      var data;
-      try { data = JSON.parse(raw); } catch(e) {
-        container.innerHTML = '<p style="color:var(--text-muted);">Diagram data invalid</p>';
-        return;
-      }
-      var nodes = data.nodes || [];
-      var edges = data.edges || [];
-      if (nodes.length === 0) return;
 
-      // Group nodes by group field.
-      var groupOrder = [];
-      var groupMap = {};
-      nodes.forEach(function(n) {
-        var g = n.group || "";
-        if (!groupMap[g]) { groupMap[g] = []; groupOrder.push(g); }
-        groupMap[g].push(n);
-      });
+  // Build SVG string from parsed diagram data and resolved CSS colors.
+  function buildArchSvg(nodes, edges, colors, markerID) {
+    if (nodes.length === 0) return "";
 
-      // Layout constants.
-      var nodeW = 160, nodeH = 54, padX = 36, padY = 60;
-      var groupPadX = 16, groupLabelH = 22, groupPadBottom = 12;
-      var nodePos = {};
-      var y = 20;
-      var groupRects = [];
-
-      groupOrder.forEach(function(gName) {
-        var gNodes = groupMap[gName];
-        var startY = y;
-        if (gName) y += groupLabelH;
-        var totalW = gNodes.length * nodeW + (gNodes.length - 1) * padX;
-        gNodes.forEach(function(n, i) {
-          nodePos[n.id] = { x: i * (nodeW + padX) + nodeW / 2, y: y + nodeH / 2, w: nodeW, h: nodeH };
-        });
-        if (gName) {
-          groupRects.push({ name: gName, y: startY, h: y + nodeH + groupPadBottom - startY, nodesW: totalW });
-        }
-        y += nodeH + padY;
-      });
-
-      // Compute SVG width: widest row + margins.
-      var maxRowW = 0;
-      groupOrder.forEach(function(gName) {
-        var gNodes = groupMap[gName];
-        var w = gNodes.length * nodeW + (gNodes.length - 1) * padX;
-        if (w > maxRowW) maxRowW = w;
-      });
-      var svgW = maxRowW + groupPadX * 4;
-      var svgH = y;
-
-      // Center each row.
-      groupOrder.forEach(function(gName) {
-        var gNodes = groupMap[gName];
-        var totalW = gNodes.length * nodeW + (gNodes.length - 1) * padX;
-        var offsetX = (svgW - totalW) / 2;
-        gNodes.forEach(function(n, i) {
-          nodePos[n.id].x = offsetX + i * (nodeW + padX) + nodeW / 2;
-        });
-      });
-      // Update group rects.
-      groupRects.forEach(function(gr) {
-        gr.x = groupPadX;
-        gr.w = svgW - groupPadX * 2;
-      });
-
-      // Read theme colors from computed styles.
-      var cs = getComputedStyle(document.documentElement);
-      var cBg = cs.getPropertyValue("--bg").trim() || "#fff";
-      var cBorder = cs.getPropertyValue("--border").trim() || "#dee2e6";
-      var cAccent = cs.getPropertyValue("--accent").trim() || "#228be6";
-      var cText = cs.getPropertyValue("--text").trim() || "#212529";
-      var cMuted = cs.getPropertyValue("--text-muted").trim() || "#868e96";
-
-      var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + svgW + ' ' + svgH + '">';
-      // Arrowhead marker.
-      svg += '<defs><marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">';
-      svg += '<polygon points="0 0,8 3,0 6" fill="' + cMuted + '"/></marker></defs>';
-
-      // Group backgrounds.
-      groupRects.forEach(function(gr) {
-        svg += '<rect x="' + gr.x + '" y="' + gr.y + '" width="' + gr.w + '" height="' + gr.h + '" rx="8" fill="none" stroke="' + cBorder + '" stroke-dasharray="4"/>';
-        svg += '<text x="' + (gr.x + 12) + '" y="' + (gr.y + 16) + '" font-size="11" font-weight="600" fill="' + cMuted + '" font-family="sans-serif">' + escSvg(gr.name) + '</text>';
-      });
-
-      // Edges.
-      edges.forEach(function(e) {
-        var from = nodePos[e.from];
-        var to = nodePos[e.to];
-        if (!from || !to) return;
-        var x1 = from.x, y1 = from.y + from.h / 2;
-        var x2 = to.x, y2 = to.y - to.h / 2;
-        if (y2 < y1) { y1 = from.y - from.h / 2; y2 = to.y + to.h / 2; }
-        var my = (y1 + y2) / 2;
-        svg += '<path d="M' + x1 + ',' + y1 + ' C' + x1 + ',' + my + ' ' + x2 + ',' + my + ' ' + x2 + ',' + y2 + '" fill="none" stroke="' + cMuted + '" stroke-width="1.5" marker-end="url(#ah)"/>';
-        if (e.label) {
-          svg += '<text x="' + ((x1 + x2) / 2) + '" y="' + (my - 4) + '" font-size="10" fill="' + cMuted + '" text-anchor="middle" font-family="sans-serif">' + escSvg(e.label) + '</text>';
-        }
-      });
-
-      // Nodes.
-      nodes.forEach(function(n) {
-        var p = nodePos[n.id];
-        if (!p) return;
-        var x = p.x - p.w / 2, ny = p.y - p.h / 2;
-        svg += '<rect x="' + x + '" y="' + ny + '" width="' + p.w + '" height="' + p.h + '" rx="6" fill="' + cBg + '" stroke="' + cAccent + '" stroke-width="1.5"/>';
-        var textY = n.desc ? p.y - 6 : p.y + 4;
-        svg += '<text x="' + p.x + '" y="' + textY + '" font-size="12" font-weight="600" fill="' + cText + '" text-anchor="middle" font-family="sans-serif">' + escSvg(truncSvg(n.label, 22)) + '</text>';
-        if (n.desc) {
-          svg += '<text x="' + p.x + '" y="' + (p.y + 10) + '" font-size="10" fill="' + cMuted + '" text-anchor="middle" font-family="sans-serif">' + escSvg(truncSvg(n.desc, 28)) + '</text>';
-        }
-      });
-
-      svg += '</svg>';
-      container.innerHTML = svg;
-
-      // Pan/zoom.
-      setupArchPanZoom(container);
+    // Group nodes by group field.
+    var groupOrder = [];
+    var groupMap = {};
+    nodes.forEach(function(n) {
+      var g = n.group || "";
+      if (!groupMap[g]) { groupMap[g] = []; groupOrder.push(g); }
+      groupMap[g].push(n);
     });
+
+    // Compute dynamic node width: fit the longest label with padding.
+    var maxLabelLen = 0;
+    nodes.forEach(function(n) {
+      if (n.label && n.label.length > maxLabelLen) maxLabelLen = n.label.length;
+    });
+    var nodeW = Math.max(160, Math.min(300, maxLabelLen * 8.5 + 32));
+    var nodeH = 54;
+    var padX = 40, padY = 60;
+    var groupPadX = 20, groupLabelH = 24, groupPadBottom = 14;
+
+    var nodePos = {};
+    var y = 24;
+    var groupRects = [];
+
+    groupOrder.forEach(function(gName) {
+      var gNodes = groupMap[gName];
+      var startY = y;
+      if (gName) y += groupLabelH;
+      gNodes.forEach(function(n, i) {
+        nodePos[n.id] = { x: i * (nodeW + padX) + nodeW / 2, y: y + nodeH / 2, w: nodeW, h: nodeH };
+      });
+      if (gName) {
+        var totalW = gNodes.length * nodeW + (gNodes.length - 1) * padX;
+        groupRects.push({ name: gName, y: startY, h: y + nodeH + groupPadBottom - startY, nodesW: totalW });
+      }
+      y += nodeH + padY;
+    });
+
+    // Compute SVG width from widest row.
+    var maxRowW = 0;
+    groupOrder.forEach(function(gName) {
+      var gNodes = groupMap[gName];
+      var w = gNodes.length * nodeW + (gNodes.length - 1) * padX;
+      if (w > maxRowW) maxRowW = w;
+    });
+    var svgW = maxRowW + groupPadX * 4;
+    var svgH = y;
+
+    // Center each row horizontally.
+    groupOrder.forEach(function(gName) {
+      var gNodes = groupMap[gName];
+      var totalW = gNodes.length * nodeW + (gNodes.length - 1) * padX;
+      var offsetX = (svgW - totalW) / 2;
+      gNodes.forEach(function(n, i) {
+        nodePos[n.id].x = offsetX + i * (nodeW + padX) + nodeW / 2;
+      });
+    });
+    groupRects.forEach(function(gr) {
+      gr.x = groupPadX;
+      gr.w = svgW - groupPadX * 2;
+    });
+
+    var mid = markerID || "ah";
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + svgW + ' ' + svgH + '">';
+    svg += '<defs><marker id="' + mid + '" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">';
+    svg += '<polygon points="0 0,8 3,0 6" fill="' + colors.muted + '"/></marker></defs>';
+
+    // Group backgrounds.
+    groupRects.forEach(function(gr) {
+      svg += '<rect x="' + gr.x + '" y="' + gr.y + '" width="' + gr.w + '" height="' + gr.h + '" rx="8" fill="none" stroke="' + colors.border + '" stroke-dasharray="4"/>';
+      svg += '<text x="' + (gr.x + 14) + '" y="' + (gr.y + 17) + '" font-size="11" font-weight="600" fill="' + colors.muted + '" font-family="sans-serif">' + escSvg(gr.name) + '</text>';
+    });
+
+    // Edges.
+    edges.forEach(function(e) {
+      var from = nodePos[e.from];
+      var to = nodePos[e.to];
+      if (!from || !to) return;
+      var x1 = from.x, y1 = from.y + from.h / 2;
+      var x2 = to.x, y2 = to.y - to.h / 2;
+      if (y2 < y1) { y1 = from.y - from.h / 2; y2 = to.y + to.h / 2; }
+      var my = (y1 + y2) / 2;
+      svg += '<path d="M' + x1 + ',' + y1 + ' C' + x1 + ',' + my + ' ' + x2 + ',' + my + ' ' + x2 + ',' + y2 + '" fill="none" stroke="' + colors.muted + '" stroke-width="1.5" marker-end="url(#' + mid + ')"/>';
+      if (e.label) {
+        svg += '<text x="' + ((x1 + x2) / 2) + '" y="' + (my - 4) + '" font-size="10" fill="' + colors.muted + '" text-anchor="middle" font-family="sans-serif">' + escSvg(e.label) + '</text>';
+      }
+    });
+
+    // Nodes.
+    nodes.forEach(function(n) {
+      var p = nodePos[n.id];
+      if (!p) return;
+      var x = p.x - p.w / 2, ny = p.y - p.h / 2;
+      svg += '<rect x="' + x + '" y="' + ny + '" width="' + p.w + '" height="' + p.h + '" rx="6" fill="' + colors.bg + '" stroke="' + colors.accent + '" stroke-width="1.5"/>';
+      var textY = n.desc ? p.y - 6 : p.y + 4;
+      svg += '<text x="' + p.x + '" y="' + textY + '" font-size="13" font-weight="600" fill="' + colors.text + '" text-anchor="middle" font-family="sans-serif">' + escSvg(n.label) + '</text>';
+      if (n.desc) {
+        var desc = n.desc.length > 38 ? n.desc.substring(0, 37) + "\u2026" : n.desc;
+        svg += '<text x="' + p.x + '" y="' + (p.y + 11) + '" font-size="10" fill="' + colors.muted + '" text-anchor="middle" font-family="sans-serif">' + escSvg(desc) + '</text>';
+      }
+    });
+
+    svg += '</svg>';
+    return svg;
+  }
+
+  function getArchColors() {
+    var cs = getComputedStyle(document.documentElement);
+    return {
+      bg: cs.getPropertyValue("--bg").trim() || "#fff",
+      border: cs.getPropertyValue("--border").trim() || "#dee2e6",
+      accent: cs.getPropertyValue("--accent").trim() || "#228be6",
+      text: cs.getPropertyValue("--text").trim() || "#212529",
+      muted: cs.getPropertyValue("--text-muted").trim() || "#868e96"
+    };
   }
 
   function setupArchPanZoom(container) {
     var svg = container.querySelector("svg");
-    if (!svg || container.getAttribute("data-panzoom") === "true") return;
-    container.setAttribute("data-panzoom", "true");
+    if (!svg) return;
     svg.style.maxWidth = "none";
     var state = { scale: 1, panX: 0, panY: 0, dragging: false, startX: 0, startY: 0 };
     function apply() {
@@ -1513,7 +1562,6 @@ const jsContent = `(function() {
       if (state.dragging) { state.dragging = false; container.classList.remove("panning"); }
     });
     container.addEventListener("dblclick", function(e) { e.preventDefault(); reset(); });
-    // Touch support.
     container.addEventListener("touchstart", function(e) {
       if (e.touches.length === 1) {
         state.dragging = true; state.startX = e.touches[0].clientX - state.panX; state.startY = e.touches[0].clientY - state.panY;
@@ -1525,14 +1573,80 @@ const jsContent = `(function() {
       e.preventDefault(); state.panX = e.touches[0].clientX - state.startX; state.panY = e.touches[0].clientY - state.startY; apply();
     }, { passive: false });
     container.addEventListener("touchend", function() { state.dragging = false; container.classList.remove("panning"); });
-    // Controls.
-    var ctrl = document.createElement("div"); ctrl.className = "arch-diagram-controls";
-    ctrl.innerHTML = '<button title="Zoom in">+</button><button title="Zoom out">&minus;</button><button title="Reset">&#8634;</button>';
-    var btns = ctrl.querySelectorAll("button");
-    btns[0].addEventListener("click", function(e) { e.stopPropagation(); state.scale = Math.min(10, state.scale * 1.25); apply(); });
-    btns[1].addEventListener("click", function(e) { e.stopPropagation(); state.scale = Math.max(0.1, state.scale * 0.8); apply(); });
-    btns[2].addEventListener("click", function(e) { e.stopPropagation(); reset(); });
-    container.appendChild(ctrl);
+    return { apply: apply, reset: reset, state: state };
+  }
+
+  function renderArchDiagrams() {
+    document.querySelectorAll(".arch-diagram").forEach(function(container, idx) {
+      var raw = container.getAttribute("data-graph");
+      if (!raw) return;
+      var data;
+      try { data = JSON.parse(raw); } catch(e) {
+        container.innerHTML = '<p style="color:var(--text-muted);">Diagram data invalid</p>';
+        return;
+      }
+      var nodes = data.nodes || [];
+      var edges = data.edges || [];
+      if (nodes.length === 0) return;
+
+      var colors = getArchColors();
+      var svgStr = buildArchSvg(nodes, edges, colors, "ah-" + idx);
+      container.innerHTML = svgStr;
+
+      // Pan/zoom on the inline diagram.
+      var pz = setupArchPanZoom(container);
+
+      // Add controls: zoom in, zoom out, reset, fullscreen.
+      var ctrl = document.createElement("div"); ctrl.className = "arch-diagram-controls";
+      ctrl.innerHTML = '<button title="Zoom in">+</button><button title="Zoom out">&minus;</button><button title="Reset">&#8634;</button><button title="Full screen">&#x26F6;</button>';
+      var btns = ctrl.querySelectorAll("button");
+      btns[0].addEventListener("click", function(e) { e.stopPropagation(); if (pz) { pz.state.scale = Math.min(10, pz.state.scale * 1.25); pz.apply(); } });
+      btns[1].addEventListener("click", function(e) { e.stopPropagation(); if (pz) { pz.state.scale = Math.max(0.1, pz.state.scale * 0.8); pz.apply(); } });
+      btns[2].addEventListener("click", function(e) { e.stopPropagation(); if (pz) pz.reset(); });
+      btns[3].addEventListener("click", function(e) {
+        e.stopPropagation();
+        openArchFullscreen(nodes, edges, idx);
+      });
+      container.appendChild(ctrl);
+    });
+  }
+
+  function openArchFullscreen(nodes, edges, idx) {
+    // Remove any existing overlay.
+    var existing = document.getElementById("arch-fullscreen");
+    if (existing) existing.remove();
+
+    var colors = getArchColors();
+    var svgStr = buildArchSvg(nodes, edges, colors, "ah-fs-" + idx);
+
+    var overlay = document.createElement("div");
+    overlay.id = "arch-fullscreen";
+    overlay.className = "arch-fullscreen-overlay";
+
+    var toolbar = document.createElement("div");
+    toolbar.className = "arch-fullscreen-toolbar";
+    toolbar.innerHTML = '<button title="Zoom in">+</button><button title="Zoom out">&minus;</button><button title="Reset view">&#8634;</button><button title="Close">&#10005; Close</button>';
+
+    var body = document.createElement("div");
+    body.className = "arch-fullscreen-body";
+    body.innerHTML = svgStr;
+
+    overlay.appendChild(toolbar);
+    overlay.appendChild(body);
+    document.body.appendChild(overlay);
+
+    // Pan/zoom on fullscreen body.
+    var pz = setupArchPanZoom(body);
+
+    var tbtns = toolbar.querySelectorAll("button");
+    tbtns[0].addEventListener("click", function() { if (pz) { pz.state.scale = Math.min(10, pz.state.scale * 1.25); pz.apply(); } });
+    tbtns[1].addEventListener("click", function() { if (pz) { pz.state.scale = Math.max(0.1, pz.state.scale * 0.8); pz.apply(); } });
+    tbtns[2].addEventListener("click", function() { if (pz) pz.reset(); });
+    tbtns[3].addEventListener("click", function() { overlay.remove(); });
+
+    // Escape key closes.
+    function onKey(e) { if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", onKey); } }
+    document.addEventListener("keydown", onKey);
   }
 
   // Render arch diagrams on load.
