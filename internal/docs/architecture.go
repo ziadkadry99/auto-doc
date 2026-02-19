@@ -268,8 +268,18 @@ func parseArchResponse(content string) archData {
 			if line == "" {
 				continue
 			}
+			// Strip common list prefixes from LLM output.
+			line = strings.TrimPrefix(line, "- ")
+			line = strings.TrimPrefix(line, "* ")
 			parts := strings.SplitN(line, ":", 2)
-			c := diagrams.Component{Name: strings.TrimSpace(parts[0])}
+			name := strings.TrimSpace(parts[0])
+			// Strip directory-style trailing slashes and backtick wrapping.
+			name = strings.TrimSuffix(name, "/")
+			name = strings.Trim(name, "`")
+			if name == "" {
+				continue
+			}
+			c := diagrams.Component{Name: name}
 			if len(parts) == 2 {
 				c.Description = strings.TrimSpace(parts[1])
 			}
