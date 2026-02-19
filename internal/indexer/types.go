@@ -14,6 +14,9 @@ type FileAnalysis struct {
 	KeyLogic     []string      `json:"key_logic,omitempty"`
 	ContentHash  string        `json:"content_hash"`
 	RepoID       string        `json:"repo_id,omitempty"`
+	// Skip is set by the LLM when a file is not relevant to the project's
+	// documentation (e.g. .gitignore, lock files, boilerplate configs).
+	Skip bool `json:"skip,omitempty"`
 }
 
 // FunctionDoc describes a single function or method found in a file.

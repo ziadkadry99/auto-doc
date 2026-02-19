@@ -91,6 +91,20 @@ func (p *Pipeline) Run(ctx context.Context, files []walker.FileInfo) (*PipelineR
 
 	// Chunk, embed, and store each analysis.
 	for _, ar := range batchResult.Results {
+		// The LLM can mark files as irrelevant to documentation.
+		// Record the hash so we don't re-analyze them, but skip storage.
+		if ar.Analysis.Skip {
+			if h, ok := walkerHashes[ar.Analysis.FilePath]; ok {
+				state.FileHashes[ar.Analysis.FilePath] = h
+			} else {
+				state.FileHashes[ar.Analysis.FilePath] = ar.Analysis.ContentHash
+			}
+			// Remove any previously stored docs for this file.
+			_ = p.store.DeleteByFilePath(ctx, ar.Analysis.FilePath)
+			result.FilesSkipped++
+			continue
+		}
+
 		docs := ChunkAnalysis(ar.Analysis, p.cfg.Quality)
 
 		// Delete old documents for this file before adding new ones.
