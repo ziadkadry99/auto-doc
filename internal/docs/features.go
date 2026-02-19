@@ -157,6 +157,8 @@ Output ONLY the raw JSON on a single line, no markdown formatting, no code fence
 	if data.ArchDiagram == "" {
 		data.ArchDiagram = fallbackArchitectureDiagram(data.Features)
 	}
+	// Store on the generator so GenerateArchitecture can reuse it.
+	g.ArchDiagram = data.ArchDiagram
 
 	// Build dependency diagram from file analyses.
 	depMap := make(map[string][]string)

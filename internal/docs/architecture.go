@@ -2,7 +2,6 @@ package docs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,23 +101,7 @@ Analyze failure modes and single points of failure (SPOFs). For each service/com
 List each service with its failure classification and explain why.
 
 ===PATTERNS===
-List design patterns used, one per line.
-
-===ARCH_DIAGRAM===
-Generate a JSON architecture diagram that shows how this system is structured.
-Think like an architect drawing a system diagram on a whiteboard — show the key layers, how data enters the system, flows through processing, and where it ends up.
-
-The JSON must follow this exact schema:
-{"nodes":[{"id":"unique_id","label":"Short Name","desc":"Brief description","group":"LayerName"}],"edges":[{"from":"source_id","to":"target_id","label":"optional relationship"}]}
-
-Guidelines:
-- Include every component that matters architecturally. Do not limit or cap the number of nodes.
-- Group nodes into meaningful architectural layers — use whatever layer names make sense for THIS project.
-- Edges should represent actual data flow or control flow, not just "these exist together". Label edges with what flows between them (e.g. "source files", "API requests", "embeddings").
-- Think about what a senior engineer would draw to explain the system to a new team member.
-- Node IDs must use only alphanumerics and underscores.
-
-Output ONLY the raw JSON on a single line, no markdown formatting, no code fences.`, summary.String(), depSummary.String())
+List design patterns used, one per line.`, summary.String(), depSummary.String())
 
 	resp, err := provider.Complete(ctx, llm.CompletionRequest{
 		Model: model,
@@ -134,6 +117,9 @@ Output ONLY the raw JSON on a single line, no markdown formatting, no code fence
 	}
 
 	data := parseArchResponse(resp.Content)
+
+	// Reuse the architecture diagram from GenerateEnhancedIndex (homepage).
+	data.ArchDiagram = g.ArchDiagram
 
 	// Build dependency diagram from file analyses.
 	depMap := make(map[string][]string)
@@ -185,7 +171,6 @@ func parseArchResponse(content string) archData {
 		"===EXIT_POINTS===",
 		"===DATAFLOW===",
 		"===PATTERNS===",
-		"===ARCH_DIAGRAM===",
 	}
 
 	// findEnd returns the index of the nearest following section marker.
@@ -304,23 +289,6 @@ func parseArchResponse(content string) archData {
 		}
 		if current != nil {
 			data.ExitPoints = append(data.ExitPoints, *current)
-		}
-	}
-
-	// Parse architecture diagram JSON.
-	if idx := strings.Index(content, "===ARCH_DIAGRAM==="); idx >= 0 {
-		after := content[idx+len("===ARCH_DIAGRAM==="):]
-		end := findEnd(after, "===ARCH_DIAGRAM===")
-		raw := strings.TrimSpace(after[:end])
-		// Strip markdown code fences if the LLM wrapped the JSON.
-		raw = strings.TrimPrefix(raw, "```json")
-		raw = strings.TrimPrefix(raw, "```")
-		raw = strings.TrimSuffix(raw, "```")
-		raw = strings.TrimSpace(raw)
-		// Validate it's actual JSON before using it.
-		var diag diagrams.DiagramData
-		if json.Unmarshal([]byte(raw), &diag) == nil && len(diag.Nodes) > 0 {
-			data.ArchDiagram = raw
 		}
 	}
 

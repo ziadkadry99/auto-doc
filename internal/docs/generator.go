@@ -14,6 +14,9 @@ import (
 type DocGenerator struct {
 	OutputDir       string
 	BusinessContext *bizctx.BusinessContext
+	// ArchDiagram is set by GenerateEnhancedIndex so GenerateArchitecture
+	// can reuse the same diagram instead of generating a separate one.
+	ArchDiagram string
 }
 
 // NewDocGenerator creates a DocGenerator that writes to the given output directory.
