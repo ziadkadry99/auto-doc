@@ -30,6 +30,7 @@ type DiagramEdge struct {
 type Component struct {
 	Name        string
 	Description string
+	Group       string // Optional layer/group name for visual grouping.
 }
 
 // Relationship represents an edge between two components.
@@ -49,6 +50,7 @@ func ArchitectureDiagram(components []Component, relationships []Relationship) s
 			ID:    sanitizeID(c.Name),
 			Label: c.Name,
 			Desc:  c.Description,
+			Group: c.Group,
 		})
 	}
 	for _, r := range relationships {

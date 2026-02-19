@@ -135,22 +135,58 @@ List design patterns used, one per line.`, summary.String(), depSummary.String()
 
 	// Build architecture diagram from parsed components and service dependencies.
 	if len(data.Components) > 1 {
-		rels := parseServiceDependencies(data.ServiceDependencies, data.Components)
-		// Fallback: if no relationships were parsed, connect all components
-		// to a central "Core" node in a star pattern instead of a linear chain.
-		if len(rels) == 0 {
-			coreComp := diagrams.Component{Name: "Core", Description: "Central hub"}
-			data.Components = append(data.Components, coreComp)
-			for _, c := range data.Components {
-				if c.Name == "Core" {
-					continue
+		// Cap at 12 components for readability.
+		if len(data.Components) > 12 {
+			data.Components = data.Components[:12]
+		}
+
+		// Assign layer groups via keyword matching for visual grouping.
+		type layerInfo struct {
+			name     string
+			keywords []string
+		}
+		layers := []layerInfo{
+			{"Interface", []string{"cli", "command", "api", "endpoint", "server", "handler", "http", "grpc", "mcp", "ui", "frontend", "gateway", "route"}},
+			{"Core", []string{"engine", "core", "index", "pipeline", "process", "analyz", "logic", "walker", "traversal", "service", "manager"}},
+			{"Storage", []string{"store", "storage", "database", "db", "vector", "embed", "persist", "cache", "queue", "redis", "mongo"}},
+			{"Output", []string{"output", "doc", "generat", "render", "template", "diagram", "site", "report", "format", "export"}},
+		}
+		for i := range data.Components {
+			lower := strings.ToLower(data.Components[i].Name + " " + data.Components[i].Description)
+			for _, l := range layers {
+				matched := false
+				for _, kw := range l.keywords {
+					if strings.Contains(lower, kw) {
+						data.Components[i].Group = l.name
+						matched = true
+						break
+					}
 				}
-				rels = append(rels, diagrams.Relationship{From: c.Name, To: "Core"})
+				if matched {
+					break
+				}
+			}
+			if data.Components[i].Group == "" {
+				data.Components[i].Group = "Core"
 			}
 		}
-		// Cap at 15 components for readability.
-		if len(data.Components) > 15 {
-			data.Components = data.Components[:15]
+
+		rels := parseServiceDependencies(data.ServiceDependencies, data.Components)
+		// Fallback: if no relationships were parsed, connect adjacent layers
+		// top-down for a clean flow instead of a star pattern.
+		if len(rels) == 0 {
+			var layerReps []string
+			for _, l := range layers {
+				for _, c := range data.Components {
+					if c.Group == l.name {
+						layerReps = append(layerReps, c.Name)
+						break
+					}
+				}
+			}
+			for i := 0; i < len(layerReps)-1; i++ {
+				rels = append(rels, diagrams.Relationship{From: layerReps[i], To: layerReps[i+1]})
+			}
 		}
 		data.ArchDiagram = diagrams.ArchitectureDiagram(data.Components, rels)
 	}
