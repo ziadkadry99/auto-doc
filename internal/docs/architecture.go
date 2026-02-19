@@ -273,9 +273,11 @@ func parseArchResponse(content string) archData {
 			line = strings.TrimPrefix(line, "* ")
 			parts := strings.SplitN(line, ":", 2)
 			name := strings.TrimSpace(parts[0])
-			// Strip directory-style trailing slashes and backtick wrapping.
+			// Strip directory-style trailing slashes, backtick wrapping,
+			// and markdown bold markers from LLM output.
 			name = strings.TrimSuffix(name, "/")
 			name = strings.Trim(name, "`")
+			name = strings.ReplaceAll(name, "**", "")
 			if name == "" {
 				continue
 			}
