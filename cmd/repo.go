@@ -12,7 +12,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ziadkadry99/auto-doc/internal/config"
+	"github.com/ziadkadry99/auto-doc/internal/contextengine"
 	"github.com/ziadkadry99/auto-doc/internal/db"
+	"github.com/ziadkadry99/auto-doc/internal/flows"
 	"github.com/ziadkadry99/auto-doc/internal/registry"
 	"github.com/ziadkadry99/auto-doc/internal/vectordb"
 )
@@ -212,6 +214,23 @@ func runRepoAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("persisting vector store: %w", err)
 	}
 
+	// Discover cross-service links (requires LLM).
+	llmProvider, llmErr := createLLMProviderFromConfig(cfg)
+	if llmErr == nil {
+		ctxStore := contextengine.NewStore(database)
+		flowStore := flows.NewStore(database)
+		linker := registry.NewLinker(repoStore, ctxStore, flowStore)
+		fmt.Fprintf(os.Stderr, "Discovering cross-service links...\n")
+		if linkErr := linker.DiscoverLinks(context.Background(), repo, llmProvider, cfg.Model); linkErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: link discovery failed: %v\n", linkErr)
+		} else {
+			links, _ := repoStore.GetLinks(context.Background(), name)
+			if len(links) > 0 {
+				fmt.Fprintf(os.Stderr, "  Discovered %d cross-service link(s)\n", len(links))
+			}
+		}
+	}
+
 	fmt.Printf("Repository %q registered successfully\n", name)
 	fmt.Printf("  Status: %s\n", repo.Status)
 	fmt.Printf("  Files: %d\n", repo.FileCount)
@@ -360,6 +379,18 @@ func runRepoSync(cmd *cobra.Command, args []string) error {
 	vectorDir := filepath.Join(cfg.OutputDir, "vectordb")
 	if err := vecStore.Persist(context.Background(), vectorDir); err != nil {
 		return fmt.Errorf("persisting vector store: %w", err)
+	}
+
+	// Re-discover cross-service links.
+	llmProvider, llmErr := createLLMProviderFromConfig(cfg)
+	if llmErr == nil {
+		ctxStore := contextengine.NewStore(database)
+		flowStore := flows.NewStore(database)
+		linker := registry.NewLinker(repoStore, ctxStore, flowStore)
+		fmt.Fprintf(os.Stderr, "Discovering cross-service links...\n")
+		if linkErr := linker.DiscoverLinks(context.Background(), repo, llmProvider, cfg.Model); linkErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: link discovery failed: %v\n", linkErr)
+		}
 	}
 
 	fmt.Printf("Repository %q synced successfully (%d files)\n", name, repo.FileCount)
