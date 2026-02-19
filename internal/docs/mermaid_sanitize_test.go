@@ -19,9 +19,6 @@ end`
 	if !strings.Contains(got, `MCPServer["Multi-Agent Protocol #lpar;MCP#rpar; Server"]`) {
 		t.Fatalf("expected normalized quoted label, got:\n%s", got)
 	}
-	if !isMermaidDiagramValid(got) {
-		t.Fatalf("expected sanitized diagram to be valid, got:\n%s", got)
-	}
 }
 
 func TestSanitizeMermaidDropsInvalidFreeText(t *testing.T) {
@@ -35,8 +32,5 @@ this is not valid mermaid`
 	}
 	if strings.Contains(got, "this is not valid mermaid") {
 		t.Fatalf("expected invalid line to be dropped, got:\n%s", got)
-	}
-	if !isMermaidDiagramValid(got) {
-		t.Fatalf("expected sanitized diagram to be valid, got:\n%s", got)
 	}
 }

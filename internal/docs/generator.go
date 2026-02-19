@@ -107,6 +107,12 @@ var templateFuncs = template.FuncMap{
 		s = strings.ReplaceAll(s, "\r", "")
 		return strings.TrimSpace(s)
 	},
+	"jsonattr": func(s string) string {
+		// Escape for safe embedding inside a single-quoted HTML attribute.
+		// json.Marshal already escapes <, >, & as \uXXXX sequences,
+		// so only single quotes need escaping.
+		return strings.ReplaceAll(s, "'", "&#39;")
+	},
 }
 
 // projectNameFromWd returns the current working directory's base name as the

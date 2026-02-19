@@ -2,10 +2,10 @@ package docs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"text/template"
@@ -137,12 +137,8 @@ DESCRIPTION: What happens when you run this and what to expect`, contextSection,
 	data.ProjectName = projectNameFromWd(g.OutputDir)
 	data.Analyses = analyses
 
-	// Generate architecture diagram via a dedicated LLM call with focused prompt.
-	data.ArchDiagram = generateArchitectureMermaid(ctx, data.Features, analyses, provider, model)
-	if data.ArchDiagram == "" || !isMermaidDiagramValid(data.ArchDiagram) {
-		fmt.Fprintf(os.Stderr, "Warning: invalid architecture mermaid from LLM; using fallback diagram\n")
-		data.ArchDiagram = fallbackArchitectureDiagram(data.Features, analyses)
-	}
+	// Generate architecture diagram deterministically from features.
+	data.ArchDiagram = fallbackArchitectureDiagram(data.Features, analyses)
 
 	// Build dependency diagram from file analyses.
 	depMap := make(map[string][]string)
@@ -429,427 +425,23 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 	return data
 }
 
-// sanitizeMermaid fixes common syntax issues in LLM-generated Mermaid diagrams.
-// It sanitizes node IDs (removing &, #, etc.) and quotes labels containing
-// special characters.
-func sanitizeMermaid(diagram string) string {
-	var out []string
-	hasHeader := false
-	subgraphDepth := 0
-	for _, rawLine := range strings.Split(diagram, "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "```") {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(line, "graph ") || strings.HasPrefix(line, "flowchart "):
-			if !hasHeader {
-				out = append(out, line)
-				hasHeader = true
-			}
-		case strings.HasPrefix(line, "%%"):
-			out = append(out, line)
-		case strings.HasPrefix(line, "subgraph "):
-			out = append(out, line)
-			subgraphDepth++
-		case line == "end" || line == "en":
-			if subgraphDepth > 0 {
-				out = append(out, "end")
-				subgraphDepth--
-			}
-		case strings.HasPrefix(line, "classDef ") || strings.HasPrefix(line, "class ") || strings.HasPrefix(line, "style "):
-			out = append(out, line)
-		default:
-			if fixed := sanitizeMermaidLine(rawLine); fixed != "" {
-				out = append(out, fixed)
-			}
-		}
-	}
-	for subgraphDepth > 0 {
-		out = append(out, "end")
-		subgraphDepth--
-	}
-	if !hasHeader {
-		out = append([]string{"graph TD"}, out...)
-	}
-	return strings.Join(out, "\n")
-}
-
-// mermaidNodeDef matches a node definition: ID["label"] or ID[label]
-var mermaidNodeDef = regexp.MustCompile(`^(\s*)(\S+?)(\[.*)$`)
-
-// mermaidArrow matches an arrow line: ID --> ID or ID -->|label| ID
-var mermaidArrow = regexp.MustCompile(`^(\s*)(\S+?)(\s*-->.*)$`)
-
-// mermaidArrowTarget matches the target node ID in an arrow (after --> or -->|...|)
-var mermaidArrowTarget = regexp.MustCompile(`(-->(?:\|[^|]*\|)?\s*)(\S+)(.*)$`)
-
-// sanitizeMermaidID replaces characters that are invalid in Mermaid node IDs.
-func sanitizeMermaidID(id string) string {
-	replacer := strings.NewReplacer(
-		"&", "_",
-		"#", "_",
-		"@", "_",
-		"!", "_",
-		"?", "_",
-		"(", "_",
-		")", "_",
-		"[", "_",
-		"]", "_",
-		"{", "_",
-		"}", "_",
-		"<", "_",
-		">", "_",
-		";", "_",
-		",", "_",
-		"'", "_",
-		"\"", "_",
-	)
-	return replacer.Replace(id)
-}
-
-func sanitizeMermaidLine(line string) string {
-	trimmed := strings.TrimSpace(line)
-
-	// Skip directives, subgraph, end, empty lines, comments.
-	if trimmed == "" || strings.HasPrefix(trimmed, "graph ") ||
-		strings.HasPrefix(trimmed, "%%") || trimmed == "end" ||
-		strings.HasPrefix(trimmed, "subgraph ") ||
-		strings.HasPrefix(trimmed, "flowchart ") ||
-		strings.HasPrefix(trimmed, "classDef ") ||
-		strings.HasPrefix(trimmed, "class ") ||
-		strings.HasPrefix(trimmed, "style ") {
-		return line
-	}
-
-	// Arrow line FIRST: ID --> ID, ID -->|label| ID, or ID[label] --> ID[label]
-	// Must check before node definitions so "A[x] --> B[y]" isn't swallowed
-	// by the greedy bracket matcher in normalizeNodeRest.
-	if m := mermaidArrow.FindStringSubmatch(line); m != nil {
-		indent, rawSource, rest := m[1], m[2], m[3]
-
-		sourceID, sourceLabel, sourceClass := parseNodeRef(rawSource)
-
-		tm := mermaidArrowTarget.FindStringSubmatch(rest)
-		if tm == nil {
-			return ""
-		}
-		arrow := strings.TrimSpace(tm[1])
-		rawTarget := strings.TrimSpace(tm[2] + tm[3])
-
-		targetID, targetLabel, targetClass := parseNodeRef(rawTarget)
-
-		var buf strings.Builder
-		buf.WriteString(indent)
-		buf.WriteString(sanitizeMermaidID(sourceID))
-		if sourceLabel != "" {
-			fmt.Fprintf(&buf, `["%s"]`, escapeMermaidLabel(sourceLabel))
-		}
-		buf.WriteString(sourceClass)
-		fmt.Fprintf(&buf, " %s ", arrow)
-		buf.WriteString(sanitizeMermaidID(targetID))
-		if targetLabel != "" {
-			fmt.Fprintf(&buf, `["%s"]`, escapeMermaidLabel(targetLabel))
-		}
-		buf.WriteString(targetClass)
-		return buf.String()
-	}
-
-	// Node definition: ID[label] or ID["label"]
-	if m := mermaidNodeDef.FindStringSubmatch(line); m != nil {
-		indent, id, rest := m[1], m[2], m[3]
-		normalized, ok := normalizeNodeRest(rest)
-		if !ok {
-			return ""
-		}
-		return indent + sanitizeMermaidID(id) + normalized
-	}
-
-	return ""
-}
-
-// parseNodeRef parses a node reference like "ID", "ID[label]", or
-// "ID[label]:::class" into its component parts.
-func parseNodeRef(s string) (id, label, class string) {
-	s = strings.TrimSpace(s)
-
-	// Extract :::class suffix (must be after any bracket label).
-	// Look for ::: that is NOT inside brackets.
-	bracketDepth := 0
-	classIdx := -1
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '[':
-			bracketDepth++
-		case ']':
-			bracketDepth--
-		}
-		if bracketDepth == 0 && i+3 <= len(s) && s[i:i+3] == ":::" {
-			classIdx = i
-			break
-		}
-	}
-	if classIdx >= 0 {
-		class = s[classIdx:]
-		// Only keep the first word of the class (e.g. ":::highlight" not ":::highlight extra")
-		if spIdx := strings.IndexByte(class, ' '); spIdx >= 0 {
-			class = class[:spIdx]
-		}
-		s = s[:classIdx]
-	}
-
-	// Split ID and [label]
-	bracketIdx := strings.Index(s, "[")
-	if bracketIdx < 0 {
-		return s, "", class
-	}
-
-	id = s[:bracketIdx]
-	rest := s[bracketIdx:]
-
-	// Find matching closing bracket.
-	depth := 0
-	end := -1
-	for i, r := range rest {
-		switch r {
-		case '[':
-			depth++
-		case ']':
-			depth--
-			if depth == 0 {
-				end = i
-			}
-		}
-		if end >= 0 {
-			break
-		}
-	}
-	if end < 0 {
-		return id, "", class
-	}
-
-	label = rest[1:end]
-	// Strip surrounding quotes.
-	if len(label) >= 2 && strings.HasPrefix(label, "\"") && strings.HasSuffix(label, "\"") {
-		label = label[1 : len(label)-1]
-	}
-
-	return id, label, class
-}
-
-func normalizeNodeRest(rest string) (string, bool) {
-	start := strings.Index(rest, "[")
-	if start < 0 {
-		return "", false
-	}
-	depth := 0
-	end := -1
-	for i, r := range rest[start:] {
-		switch r {
-		case '[':
-			depth++
-		case ']':
-			depth--
-			if depth == 0 {
-				end = start + i
-				break
-			}
-		}
-	}
-	if end < 0 {
-		return "", false
-	}
-
-	label := strings.TrimSpace(rest[start+1 : end])
-	if len(label) >= 2 && strings.HasPrefix(label, "\"") && strings.HasSuffix(label, "\"") {
-		label = strings.TrimPrefix(strings.TrimSuffix(label, "\""), "\"")
-	}
-	suffix := strings.TrimSpace(rest[end+1:])
-	if strings.HasPrefix(suffix, ":::") {
-		parts := strings.Fields(suffix)
-		if len(parts) > 0 {
-			suffix = parts[0]
-		} else {
-			suffix = ""
-		}
-	} else {
-		suffix = ""
-	}
-	return fmt.Sprintf("[\"%s\"]%s", escapeMermaidLabel(label), suffix), true
-}
-
-func escapeMermaidLabel(s string) string {
-	s = strings.ReplaceAll(s, "\"", "#quot;")
-	s = strings.ReplaceAll(s, "(", "#lpar;")
-	s = strings.ReplaceAll(s, ")", "#rpar;")
-	s = strings.ReplaceAll(s, "[", "#lsqb;")
-	s = strings.ReplaceAll(s, "]", "#rsqb;")
-	s = strings.ReplaceAll(s, "{", "#lbrace;")
-	s = strings.ReplaceAll(s, "}", "#rbrace;")
-	s = strings.ReplaceAll(s, "<", "#lt;")
-	s = strings.ReplaceAll(s, ">", "#gt;")
-	return s
-}
-
-func isMermaidDiagramValid(diagram string) bool {
-	hasHeader := false
-	subgraphDepth := 0
-	nodeCount := 0
-	edgeCount := 0
-	nodesSeen := make(map[string]bool)
-	for _, line := range strings.Split(diagram, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "%%") {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(trimmed, "graph ") || strings.HasPrefix(trimmed, "flowchart "):
-			hasHeader = true
-		case strings.HasPrefix(trimmed, "subgraph "):
-			subgraphDepth++
-		case trimmed == "end":
-			if subgraphDepth == 0 {
-				return false
-			}
-			subgraphDepth--
-		case strings.HasPrefix(trimmed, "classDef ") || strings.HasPrefix(trimmed, "class ") || strings.HasPrefix(trimmed, "style "):
-			continue
-		default:
-			if sanitizeMermaidLine(trimmed) == "" {
-				return false
-			}
-			if strings.Contains(trimmed, "-->") {
-				edgeCount++
-				// Count unique nodes from arrow lines.
-				if m := mermaidArrow.FindStringSubmatch(trimmed); m != nil {
-					srcID, _, _ := parseNodeRef(m[2])
-					if !nodesSeen[srcID] {
-						nodesSeen[srcID] = true
-						nodeCount++
-					}
-					if tm := mermaidArrowTarget.FindStringSubmatch(m[3]); tm != nil {
-						tgtID, _, _ := parseNodeRef(strings.TrimSpace(tm[2] + tm[3]))
-						if !nodesSeen[tgtID] {
-							nodesSeen[tgtID] = true
-							nodeCount++
-						}
-					}
-				}
-			} else if m := mermaidNodeDef.FindStringSubmatch(trimmed); m != nil {
-				nid := m[2]
-				if !nodesSeen[nid] {
-					nodesSeen[nid] = true
-					nodeCount++
-				}
-			}
-		}
-	}
-	if nodeCount > 15 || edgeCount > 30 {
-		return false
-	}
-	statementCount := nodeCount + edgeCount
-	return hasHeader && subgraphDepth == 0 && statementCount > 0
-}
-
-// generateArchitectureMermaid makes a dedicated LLM call to produce a concise,
-// high-level architecture diagram. It uses the already-parsed features (not raw
-// file lists) so the LLM focuses on logical components rather than file paths.
-func generateArchitectureMermaid(ctx context.Context, features []Feature, analyses []indexer.FileAnalysis, provider llm.Provider, model string) string {
-	if len(features) == 0 {
-		return ""
-	}
-
-	// Build component list from features.
-	var components strings.Builder
-	for _, f := range features {
-		desc := f.Description
-		if len(desc) > 120 {
-			desc = desc[:120] + "..."
-		}
-		fmt.Fprintf(&components, "- %s: %s\n", f.Name, desc)
-	}
-
-	// Build condensed package-level dependency summary.
-	fileToFeature := make(map[string]string, len(analyses))
-	for _, f := range features {
-		for _, fp := range f.Files {
-			fileToFeature[fp] = f.Name
-		}
-	}
-	depSeen := make(map[string]bool)
-	var flows strings.Builder
-	for _, a := range analyses {
-		fromFeat, ok := fileToFeature[a.FilePath]
-		if !ok {
-			continue
-		}
-		for _, d := range a.Dependencies {
-			toFeat, ok := fileToFeature[d.Name]
-			if !ok || toFeat == fromFeat {
-				continue
-			}
-			key := fromFeat + "->" + toFeat
-			if depSeen[key] {
-				continue
-			}
-			depSeen[key] = true
-			fmt.Fprintf(&flows, "- %s depends on %s\n", fromFeat, toFeat)
-		}
-	}
-	if flows.Len() == 0 {
-		flows.WriteString("(no direct inter-component dependencies detected)\n")
-	}
-
-	prompt := fmt.Sprintf(`You are generating a high-level architecture diagram for a software project.
-
-The project has these major components:
-%s
-Key data flows between components:
-%s
-Generate a Mermaid "graph TD" diagram following these STRICT rules:
-1. Use 5-10 nodes maximum. Each node is a logical component, NOT a file or directory.
-2. Node labels should be short (2-4 words). Use human-readable names, not file paths.
-3. Group nodes into 2-4 subgraph layers (e.g. "Interface", "Core", "Storage", "External").
-4. Arrows represent data flow and control flow, NOT import relationships.
-5. Each node should have at most 4-5 connections.
-6. Do NOT use file paths, directory names, or package names as node IDs or labels.
-
-Output ONLY the Mermaid code. No fences, no explanation.`, components.String(), flows.String())
-
-	resp, err := provider.Complete(ctx, llm.CompletionRequest{
-		Model: model,
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: "You are a software architect producing a concise Mermaid architecture diagram. Output only valid Mermaid syntax."},
-			{Role: llm.RoleUser, Content: prompt},
-		},
-		MaxTokens:   2048,
-		Temperature: 0.2,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: architecture diagram LLM call failed: %v\n", err)
-		return ""
-	}
-
-	diagram := strings.TrimSpace(resp.Content)
-	// Strip Mermaid fences if the LLM wrapped them.
-	diagram = strings.TrimPrefix(diagram, "```mermaid")
-	diagram = strings.TrimPrefix(diagram, "```")
-	diagram = strings.TrimSuffix(diagram, "```")
-	return sanitizeMermaid(strings.TrimSpace(diagram))
-}
 
 func fallbackArchitectureDiagram(features []Feature, analyses []indexer.FileAnalysis) string {
 	if len(features) == 0 {
-		return "graph TD\n    App[\"Application\"]"
+		data := diagrams.DiagramData{
+			Nodes: []diagrams.DiagramNode{{ID: "App", Label: "Application"}},
+		}
+		b, _ := json.Marshal(data)
+		return string(b)
 	}
 
-	// Cap at 10 features — merge the smallest ones if needed.
+	// Cap at 10 features.
 	feats := features
 	if len(feats) > 10 {
 		feats = feats[:10]
 	}
 
-	// Infer layers from feature names/descriptions for subgraph grouping.
+	// Infer layers from feature names/descriptions for grouping.
 	type layerInfo struct {
 		name     string
 		keywords []string
@@ -861,28 +453,42 @@ func fallbackArchitectureDiagram(features []Feature, analyses []indexer.FileAnal
 		{"Output", []string{"output", "doc", "generat", "render", "template", "diagram", "site", "report", "format"}},
 	}
 
-	layerFeatures := make(map[string][]Feature)
-	assigned := make(map[string]bool)
+	assigned := make(map[string]string) // feat name → layer name
 	for _, feat := range feats {
 		lower := strings.ToLower(feat.Name + " " + feat.Description)
 		for _, l := range layers {
 			for _, kw := range l.keywords {
-				if strings.Contains(lower, kw) && !assigned[feat.Name] {
-					layerFeatures[l.name] = append(layerFeatures[l.name], feat)
-					assigned[feat.Name] = true
+				if strings.Contains(lower, kw) {
+					assigned[feat.Name] = l.name
 					break
 				}
 			}
-			if assigned[feat.Name] {
+			if assigned[feat.Name] != "" {
 				break
 			}
 		}
-		if !assigned[feat.Name] {
-			layerFeatures["Core"] = append(layerFeatures["Core"], feat)
+		if assigned[feat.Name] == "" {
+			assigned[feat.Name] = "Core"
 		}
 	}
 
-	// Build cross-feature dependency relationships.
+	// Build nodes with group field.
+	sanitizeID := func(s string) string {
+		r := strings.NewReplacer("/", "_", "\\", "_", ".", "_", "-", "_", " ", "_",
+			"(", "_", ")", "_", "[", "_", "]", "_", "{", "_", "}", "_", ":", "_")
+		return r.Replace(s)
+	}
+
+	var data diagrams.DiagramData
+	for _, feat := range feats {
+		data.Nodes = append(data.Nodes, diagrams.DiagramNode{
+			ID:    sanitizeID(feat.Name),
+			Label: feat.Name,
+			Group: assigned[feat.Name],
+		})
+	}
+
+	// Build cross-feature dependency edges.
 	fileToFeature := make(map[string]string, len(analyses))
 	for _, feat := range feats {
 		for _, fp := range feat.Files {
@@ -890,7 +496,6 @@ func fallbackArchitectureDiagram(features []Feature, analyses []indexer.FileAnal
 		}
 	}
 	seen := make(map[string]bool)
-	var relationships []diagrams.Relationship
 	for _, a := range analyses {
 		fromFeat, ok := fileToFeature[a.FilePath]
 		if !ok {
@@ -906,64 +511,34 @@ func fallbackArchitectureDiagram(features []Feature, analyses []indexer.FileAnal
 				continue
 			}
 			seen[key] = true
-			relationships = append(relationships, diagrams.Relationship{From: fromFeat, To: toFeat})
+			data.Edges = append(data.Edges, diagrams.DiagramEdge{
+				From: sanitizeID(fromFeat),
+				To:   sanitizeID(toFeat),
+			})
 		}
 	}
 
-	// Build diagram with subgraphs.
-	var b strings.Builder
-	b.WriteString("graph TD\n")
-
-	sanitizeID := func(s string) string {
-		r := strings.NewReplacer("/", "_", "\\", "_", ".", "_", "-", "_", " ", "_",
-			"(", "_", ")", "_", "[", "_", "]", "_", "{", "_", "}", "_", ":", "_")
-		return r.Replace(s)
-	}
-	escape := func(s string) string {
-		s = strings.ReplaceAll(s, "\"", "#quot;")
-		s = strings.ReplaceAll(s, "(", "#lpar;")
-		s = strings.ReplaceAll(s, ")", "#rpar;")
-		s = strings.ReplaceAll(s, "[", "#lsqb;")
-		s = strings.ReplaceAll(s, "]", "#rsqb;")
-		s = strings.ReplaceAll(s, "{", "#lbrace;")
-		s = strings.ReplaceAll(s, "}", "#rbrace;")
-		s = strings.ReplaceAll(s, "<", "#lt;")
-		s = strings.ReplaceAll(s, ">", "#gt;")
-		return s
-	}
-
-	// Write subgraphs for layers that have features.
-	for _, l := range layers {
-		lf, ok := layerFeatures[l.name]
-		if !ok || len(lf) == 0 {
-			continue
-		}
-		fmt.Fprintf(&b, "    subgraph %s\n", l.name)
-		for _, feat := range lf {
-			fmt.Fprintf(&b, "        %s[\"%s\"]\n", sanitizeID(feat.Name), escape(feat.Name))
-		}
-		b.WriteString("    end\n")
-	}
-
-	// Write relationships.
-	if len(relationships) > 0 {
-		for _, r := range relationships {
-			fmt.Fprintf(&b, "    %s --> %s\n", sanitizeID(r.From), sanitizeID(r.To))
-		}
-	} else {
-		// No relationships found — connect adjacent layers for minimal structure.
+	// If no edges found, connect adjacent layers for minimal structure.
+	if len(data.Edges) == 0 {
 		var layerReps []string
 		for _, l := range layers {
-			if lf, ok := layerFeatures[l.name]; ok && len(lf) > 0 {
-				layerReps = append(layerReps, lf[0].Name)
+			for _, feat := range feats {
+				if assigned[feat.Name] == l.name {
+					layerReps = append(layerReps, feat.Name)
+					break
+				}
 			}
 		}
 		for i := 0; i < len(layerReps)-1; i++ {
-			fmt.Fprintf(&b, "    %s --> %s\n", sanitizeID(layerReps[i]), sanitizeID(layerReps[i+1]))
+			data.Edges = append(data.Edges, diagrams.DiagramEdge{
+				From: sanitizeID(layerReps[i]),
+				To:   sanitizeID(layerReps[i+1]),
+			})
 		}
 	}
 
-	return strings.TrimRight(b.String(), "\n")
+	b, _ := json.Marshal(data)
+	return string(b)
 }
 
 // generateFeatureDetails makes concurrent LLM calls to produce a detailed

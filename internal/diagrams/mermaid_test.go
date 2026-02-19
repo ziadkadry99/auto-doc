@@ -1,6 +1,7 @@
 package diagrams
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -18,20 +19,29 @@ func TestArchitectureDiagram(t *testing.T) {
 
 	result := ArchitectureDiagram(components, relationships)
 
-	if !strings.HasPrefix(result, "graph TD\n") {
-		t.Error("diagram should start with 'graph TD'")
+	var data DiagramData
+	if err := json.Unmarshal([]byte(result), &data); err != nil {
+		t.Fatalf("result is not valid JSON: %v\ngot: %s", err, result)
 	}
-	checks := []string{
-		`CLI["CLI`,
-		`Config["Config`,
-		`Indexer["Indexer`,
-		"CLI -->|loads| Config",
-		"CLI --> Indexer",
+	if len(data.Nodes) != 3 {
+		t.Errorf("expected 3 nodes, got %d", len(data.Nodes))
 	}
-	for _, c := range checks {
-		if !strings.Contains(result, c) {
-			t.Errorf("diagram missing: %q\ngot:\n%s", c, result)
+	if len(data.Edges) != 2 {
+		t.Errorf("expected 2 edges, got %d", len(data.Edges))
+	}
+	// Check node labels.
+	labels := make(map[string]bool)
+	for _, n := range data.Nodes {
+		labels[n.Label] = true
+	}
+	for _, want := range []string{"CLI", "Config", "Indexer"} {
+		if !labels[want] {
+			t.Errorf("missing node label %q", want)
 		}
+	}
+	// Check edge with label.
+	if data.Edges[0].Label != "loads" {
+		t.Errorf("expected first edge label 'loads', got %q", data.Edges[0].Label)
 	}
 }
 
@@ -42,14 +52,26 @@ func TestDependencyDiagram(t *testing.T) {
 
 	result := DependencyDiagram(deps)
 
-	if !strings.HasPrefix(result, "graph LR\n") {
-		t.Error("diagram should start with 'graph LR'")
+	var data DiagramData
+	if err := json.Unmarshal([]byte(result), &data); err != nil {
+		t.Fatalf("result is not valid JSON: %v\ngot: %s", err, result)
 	}
-	if !strings.Contains(result, "main_go") {
-		t.Errorf("diagram missing sanitized node ID 'main_go', got:\n%s", result)
+	if len(data.Nodes) != 3 {
+		t.Errorf("expected 3 nodes (main.go, fmt, os), got %d", len(data.Nodes))
 	}
-	if !strings.Contains(result, `"fmt"`) {
-		t.Errorf("diagram missing fmt dependency, got:\n%s", result)
+	if len(data.Edges) != 2 {
+		t.Errorf("expected 2 edges, got %d", len(data.Edges))
+	}
+	// Check that main_go node exists.
+	found := false
+	for _, n := range data.Nodes {
+		if n.ID == "main_go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected node with ID 'main_go'")
 	}
 }
 

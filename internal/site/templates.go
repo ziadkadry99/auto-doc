@@ -892,6 +892,58 @@ body {
   border-color: var(--accent);
 }
 
+/* ============ Architecture Diagrams (JSON→SVG) ============ */
+.arch-diagram {
+  text-align: center;
+  margin: 16px 0;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+  min-height: 120px;
+}
+
+.arch-diagram.panning {
+  cursor: grabbing;
+}
+
+.arch-diagram svg {
+  width: 100%;
+  max-height: 600px;
+}
+
+.arch-diagram-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 10;
+}
+
+.arch-diagram-controls button {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.arch-diagram-controls button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* ============ Responsive ============ */
 @media (max-width: 768px) {
   .sidebar {
@@ -988,6 +1040,8 @@ const jsContent = `(function() {
   function setTheme(theme) {
     html.setAttribute("data-theme", theme);
     try { localStorage.setItem("autodoc-theme", theme); } catch(e) {}
+    // Re-render architecture diagrams with new theme colors.
+    if (typeof renderArchDiagrams === "function") { renderArchDiagrams(); }
     // Re-render Mermaid diagrams with the new theme
     if (typeof mermaid !== "undefined") {
       mermaid.initialize({ startOnLoad: false, theme: theme === "dark" ? "dark" : "default", securityLevel: "loose", maxEdges: 2000, flowchart: { htmlLabels: true } });
@@ -1293,6 +1347,196 @@ const jsContent = `(function() {
     pre.style.position = "relative";
     pre.appendChild(btn);
   });
+
+  // ===== Architecture diagram JSON→SVG renderer =====
+  function escSvg(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  function truncSvg(s, max) {
+    return s.length > max ? s.substring(0, max - 1) + "\u2026" : s;
+  }
+  function renderArchDiagrams() {
+    document.querySelectorAll(".arch-diagram").forEach(function(container) {
+      var raw = container.getAttribute("data-graph");
+      if (!raw) return;
+      var data;
+      try { data = JSON.parse(raw); } catch(e) {
+        container.innerHTML = '<p style="color:var(--text-muted);">Diagram data invalid</p>';
+        return;
+      }
+      var nodes = data.nodes || [];
+      var edges = data.edges || [];
+      if (nodes.length === 0) return;
+
+      // Group nodes by group field.
+      var groupOrder = [];
+      var groupMap = {};
+      nodes.forEach(function(n) {
+        var g = n.group || "";
+        if (!groupMap[g]) { groupMap[g] = []; groupOrder.push(g); }
+        groupMap[g].push(n);
+      });
+
+      // Layout constants.
+      var nodeW = 160, nodeH = 54, padX = 36, padY = 60;
+      var groupPadX = 16, groupLabelH = 22, groupPadBottom = 12;
+      var nodePos = {};
+      var y = 20;
+      var groupRects = [];
+
+      groupOrder.forEach(function(gName) {
+        var gNodes = groupMap[gName];
+        var startY = y;
+        if (gName) y += groupLabelH;
+        var totalW = gNodes.length * nodeW + (gNodes.length - 1) * padX;
+        gNodes.forEach(function(n, i) {
+          nodePos[n.id] = { x: i * (nodeW + padX) + nodeW / 2, y: y + nodeH / 2, w: nodeW, h: nodeH };
+        });
+        if (gName) {
+          groupRects.push({ name: gName, y: startY, h: y + nodeH + groupPadBottom - startY, nodesW: totalW });
+        }
+        y += nodeH + padY;
+      });
+
+      // Compute SVG width: widest row + margins.
+      var maxRowW = 0;
+      groupOrder.forEach(function(gName) {
+        var gNodes = groupMap[gName];
+        var w = gNodes.length * nodeW + (gNodes.length - 1) * padX;
+        if (w > maxRowW) maxRowW = w;
+      });
+      var svgW = maxRowW + groupPadX * 4;
+      var svgH = y;
+
+      // Center each row.
+      groupOrder.forEach(function(gName) {
+        var gNodes = groupMap[gName];
+        var totalW = gNodes.length * nodeW + (gNodes.length - 1) * padX;
+        var offsetX = (svgW - totalW) / 2;
+        gNodes.forEach(function(n, i) {
+          nodePos[n.id].x = offsetX + i * (nodeW + padX) + nodeW / 2;
+        });
+      });
+      // Update group rects.
+      groupRects.forEach(function(gr) {
+        gr.x = groupPadX;
+        gr.w = svgW - groupPadX * 2;
+      });
+
+      // Read theme colors from computed styles.
+      var cs = getComputedStyle(document.documentElement);
+      var cBg = cs.getPropertyValue("--bg").trim() || "#fff";
+      var cBorder = cs.getPropertyValue("--border").trim() || "#dee2e6";
+      var cAccent = cs.getPropertyValue("--accent").trim() || "#228be6";
+      var cText = cs.getPropertyValue("--text").trim() || "#212529";
+      var cMuted = cs.getPropertyValue("--text-muted").trim() || "#868e96";
+
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + svgW + ' ' + svgH + '">';
+      // Arrowhead marker.
+      svg += '<defs><marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">';
+      svg += '<polygon points="0 0,8 3,0 6" fill="' + cMuted + '"/></marker></defs>';
+
+      // Group backgrounds.
+      groupRects.forEach(function(gr) {
+        svg += '<rect x="' + gr.x + '" y="' + gr.y + '" width="' + gr.w + '" height="' + gr.h + '" rx="8" fill="none" stroke="' + cBorder + '" stroke-dasharray="4"/>';
+        svg += '<text x="' + (gr.x + 12) + '" y="' + (gr.y + 16) + '" font-size="11" font-weight="600" fill="' + cMuted + '" font-family="sans-serif">' + escSvg(gr.name) + '</text>';
+      });
+
+      // Edges.
+      edges.forEach(function(e) {
+        var from = nodePos[e.from];
+        var to = nodePos[e.to];
+        if (!from || !to) return;
+        var x1 = from.x, y1 = from.y + from.h / 2;
+        var x2 = to.x, y2 = to.y - to.h / 2;
+        if (y2 < y1) { y1 = from.y - from.h / 2; y2 = to.y + to.h / 2; }
+        var my = (y1 + y2) / 2;
+        svg += '<path d="M' + x1 + ',' + y1 + ' C' + x1 + ',' + my + ' ' + x2 + ',' + my + ' ' + x2 + ',' + y2 + '" fill="none" stroke="' + cMuted + '" stroke-width="1.5" marker-end="url(#ah)"/>';
+        if (e.label) {
+          svg += '<text x="' + ((x1 + x2) / 2) + '" y="' + (my - 4) + '" font-size="10" fill="' + cMuted + '" text-anchor="middle" font-family="sans-serif">' + escSvg(e.label) + '</text>';
+        }
+      });
+
+      // Nodes.
+      nodes.forEach(function(n) {
+        var p = nodePos[n.id];
+        if (!p) return;
+        var x = p.x - p.w / 2, ny = p.y - p.h / 2;
+        svg += '<rect x="' + x + '" y="' + ny + '" width="' + p.w + '" height="' + p.h + '" rx="6" fill="' + cBg + '" stroke="' + cAccent + '" stroke-width="1.5"/>';
+        var textY = n.desc ? p.y - 6 : p.y + 4;
+        svg += '<text x="' + p.x + '" y="' + textY + '" font-size="12" font-weight="600" fill="' + cText + '" text-anchor="middle" font-family="sans-serif">' + escSvg(truncSvg(n.label, 22)) + '</text>';
+        if (n.desc) {
+          svg += '<text x="' + p.x + '" y="' + (p.y + 10) + '" font-size="10" fill="' + cMuted + '" text-anchor="middle" font-family="sans-serif">' + escSvg(truncSvg(n.desc, 28)) + '</text>';
+        }
+      });
+
+      svg += '</svg>';
+      container.innerHTML = svg;
+
+      // Pan/zoom.
+      setupArchPanZoom(container);
+    });
+  }
+
+  function setupArchPanZoom(container) {
+    var svg = container.querySelector("svg");
+    if (!svg || container.getAttribute("data-panzoom") === "true") return;
+    container.setAttribute("data-panzoom", "true");
+    svg.style.maxWidth = "none";
+    var state = { scale: 1, panX: 0, panY: 0, dragging: false, startX: 0, startY: 0 };
+    function apply() {
+      svg.style.transform = "translate(" + state.panX + "px," + state.panY + "px) scale(" + state.scale + ")";
+      svg.style.transformOrigin = "0 0";
+    }
+    function reset() { state.scale = 1; state.panX = 0; state.panY = 0; apply(); }
+    container.addEventListener("wheel", function(e) {
+      e.preventDefault();
+      var d = e.deltaY > 0 ? 0.9 : 1.1;
+      var ns = Math.max(0.1, Math.min(10, state.scale * d));
+      var r = container.getBoundingClientRect();
+      var cx = e.clientX - r.left, cy = e.clientY - r.top;
+      state.panX = cx - (cx - state.panX) * (ns / state.scale);
+      state.panY = cy - (cy - state.panY) * (ns / state.scale);
+      state.scale = ns;
+      apply();
+    }, { passive: false });
+    container.addEventListener("mousedown", function(e) {
+      if (e.button !== 0) return;
+      state.dragging = true; state.startX = e.clientX - state.panX; state.startY = e.clientY - state.panY;
+      container.classList.add("panning"); e.preventDefault();
+    });
+    document.addEventListener("mousemove", function(e) {
+      if (!state.dragging) return;
+      state.panX = e.clientX - state.startX; state.panY = e.clientY - state.startY; apply();
+    });
+    document.addEventListener("mouseup", function() {
+      if (state.dragging) { state.dragging = false; container.classList.remove("panning"); }
+    });
+    container.addEventListener("dblclick", function(e) { e.preventDefault(); reset(); });
+    // Touch support.
+    container.addEventListener("touchstart", function(e) {
+      if (e.touches.length === 1) {
+        state.dragging = true; state.startX = e.touches[0].clientX - state.panX; state.startY = e.touches[0].clientY - state.panY;
+        container.classList.add("panning");
+      }
+    }, { passive: true });
+    container.addEventListener("touchmove", function(e) {
+      if (!state.dragging || e.touches.length !== 1) return;
+      e.preventDefault(); state.panX = e.touches[0].clientX - state.startX; state.panY = e.touches[0].clientY - state.startY; apply();
+    }, { passive: false });
+    container.addEventListener("touchend", function() { state.dragging = false; container.classList.remove("panning"); });
+    // Controls.
+    var ctrl = document.createElement("div"); ctrl.className = "arch-diagram-controls";
+    ctrl.innerHTML = '<button title="Zoom in">+</button><button title="Zoom out">&minus;</button><button title="Reset">&#8634;</button>';
+    var btns = ctrl.querySelectorAll("button");
+    btns[0].addEventListener("click", function(e) { e.stopPropagation(); state.scale = Math.min(10, state.scale * 1.25); apply(); });
+    btns[1].addEventListener("click", function(e) { e.stopPropagation(); state.scale = Math.max(0.1, state.scale * 0.8); apply(); });
+    btns[2].addEventListener("click", function(e) { e.stopPropagation(); reset(); });
+    container.appendChild(ctrl);
+  }
+
+  // Render arch diagrams on load.
+  renderArchDiagrams();
 
   // ===== Mermaid pan/zoom =====
   function setupMermaidPanZoom() {

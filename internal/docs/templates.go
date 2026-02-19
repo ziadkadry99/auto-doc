@@ -141,11 +141,11 @@ const architectureTemplate = `# Architecture Overview
 {{- end }}
 {{ if .ArchDiagram }}## Architecture Diagram
 
-` + "```mermaid\n{{ .ArchDiagram }}\n```" + `
+<div class="arch-diagram" data-graph='{{ jsonattr .ArchDiagram }}'></div>
 {{ end }}
 {{ if .DepDiagram }}## Dependency Diagram
 
-` + "```mermaid\n{{ .DepDiagram }}\n```" + `
+<div class="arch-diagram" data-graph='{{ jsonattr .DepDiagram }}'></div>
 {{ end }}
 `
 
@@ -199,7 +199,7 @@ const enhancedIndexTemplate = `# {{ .ProjectName }} — Documentation
 {{- end }}
 {{ if .ArchDiagram }}## Architecture
 
-` + "```mermaid\n{{ .ArchDiagram }}\n```" + `
+<div class="arch-diagram" data-graph='{{ jsonattr .ArchDiagram }}'></div>
 {{ end }}
 ## Component Map
 
@@ -216,7 +216,7 @@ const enhancedIndexTemplate = `# {{ .ProjectName }} — Documentation
 {{- end }}
 {{ if .DepDiagram }}## Dependency Graph
 
-` + "```mermaid\n{{ .DepDiagram }}\n```" + `
+<div class="arch-diagram" data-graph='{{ jsonattr .DepDiagram }}'></div>
 {{ end }}
 ## Quick Links
 

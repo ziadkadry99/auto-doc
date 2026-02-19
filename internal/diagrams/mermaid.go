@@ -1,9 +1,30 @@
 package diagrams
 
 import (
-	"fmt"
+	"encoding/json"
 	"strings"
 )
+
+// DiagramData is the JSON-serializable structure for architecture/dependency diagrams.
+type DiagramData struct {
+	Nodes []DiagramNode `json:"nodes"`
+	Edges []DiagramEdge `json:"edges"`
+}
+
+// DiagramNode represents a box in the rendered diagram.
+type DiagramNode struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Desc  string `json:"desc,omitempty"`
+	Group string `json:"group,omitempty"`
+}
+
+// DiagramEdge represents an arrow between two nodes.
+type DiagramEdge struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Label string `json:"label,omitempty"`
+}
 
 // Component represents a node in an architecture diagram.
 type Component struct {
@@ -18,48 +39,57 @@ type Relationship struct {
 	Label string
 }
 
-// ArchitectureDiagram generates a mermaid graph TD diagram from components and relationships.
+// ArchitectureDiagram returns a JSON string encoding a DiagramData structure
+// from the given components and relationships. The JSON is rendered to SVG
+// by the site's JavaScript renderer.
 func ArchitectureDiagram(components []Component, relationships []Relationship) string {
-	var b strings.Builder
-	b.WriteString("graph TD\n")
-
+	data := DiagramData{}
 	for _, c := range components {
-		id := sanitizeID(c.Name)
-		if c.Description != "" {
-			b.WriteString(fmt.Sprintf("    %s[\"%s<br/>%s\"]\n", id, escapeMermaid(c.Name), escapeMermaid(c.Description)))
-		} else {
-			b.WriteString(fmt.Sprintf("    %s[\"%s\"]\n", id, escapeMermaid(c.Name)))
-		}
+		data.Nodes = append(data.Nodes, DiagramNode{
+			ID:    sanitizeID(c.Name),
+			Label: c.Name,
+			Desc:  c.Description,
+		})
 	}
-
 	for _, r := range relationships {
-		fromID := sanitizeID(r.From)
-		toID := sanitizeID(r.To)
-		if r.Label != "" {
-			b.WriteString(fmt.Sprintf("    %s -->|%s| %s\n", fromID, escapeMermaid(r.Label), toID))
-		} else {
-			b.WriteString(fmt.Sprintf("    %s --> %s\n", fromID, toID))
-		}
+		data.Edges = append(data.Edges, DiagramEdge{
+			From:  sanitizeID(r.From),
+			To:    sanitizeID(r.To),
+			Label: r.Label,
+		})
 	}
-
-	return b.String()
+	b, err := json.Marshal(data)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
-// DependencyDiagram generates a mermaid dependency graph from a map of file to dependencies.
+// DependencyDiagram returns a JSON string encoding a DiagramData structure
+// from the given file-to-dependencies map.
 func DependencyDiagram(deps map[string][]string) string {
-	var b strings.Builder
-	b.WriteString("graph LR\n")
-
+	data := DiagramData{}
+	seen := make(map[string]bool)
 	for file, fileDeps := range deps {
-		fromID := sanitizeID(file)
-		b.WriteString(fmt.Sprintf("    %s[\"%s\"]\n", fromID, escapeMermaid(file)))
+		fileID := sanitizeID(file)
+		if !seen[fileID] {
+			data.Nodes = append(data.Nodes, DiagramNode{ID: fileID, Label: file})
+			seen[fileID] = true
+		}
 		for _, dep := range fileDeps {
 			depID := sanitizeID(dep)
-			b.WriteString(fmt.Sprintf("    %s --> %s[\"%s\"]\n", fromID, depID, escapeMermaid(dep)))
+			if !seen[depID] {
+				data.Nodes = append(data.Nodes, DiagramNode{ID: depID, Label: dep})
+				seen[depID] = true
+			}
+			data.Edges = append(data.Edges, DiagramEdge{From: fileID, To: depID})
 		}
 	}
-
-	return b.String()
+	b, err := json.Marshal(data)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // sanitizeID converts a string into a safe mermaid node ID.

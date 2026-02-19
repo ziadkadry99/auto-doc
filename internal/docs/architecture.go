@@ -148,20 +148,14 @@ List design patterns used, one per line.`, summary.String(), depSummary.String()
 				rels = append(rels, diagrams.Relationship{From: c.Name, To: "Core"})
 			}
 		}
-		diagram := diagrams.ArchitectureDiagram(data.Components, rels)
-		if isMermaidDiagramValid(diagram) {
-			data.ArchDiagram = diagram
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: programmatic architecture diagram too complex; simplifying\n")
-			// Simplify: keep only the first 15 components and their relationships.
-			if len(data.Components) > 15 {
-				data.Components = data.Components[:15]
-			}
-			data.ArchDiagram = diagrams.ArchitectureDiagram(data.Components, rels)
+		// Cap at 15 components for readability.
+		if len(data.Components) > 15 {
+			data.Components = data.Components[:15]
 		}
+		data.ArchDiagram = diagrams.ArchitectureDiagram(data.Components, rels)
 	}
 
-	tmpl, err := template.New("arch").Parse(architectureTemplate)
+	tmpl, err := template.New("arch").Funcs(templateFuncs).Parse(architectureTemplate)
 	if err != nil {
 		return err
 	}
