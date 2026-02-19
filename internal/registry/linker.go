@@ -208,13 +208,30 @@ You MUST respond with valid JSON matching this schema:
 }
 
 Rules:
-- Only report dependencies you have evidence for (from detected calls, shared topics, etc.)
+- Report ALL dependencies you have evidence for (from detected calls, dependencies in analyses, shared topics, etc.)
 - The "from" field is the service that initiates the call
 - The "to" field is the service that receives the call
 - If no dependencies are found, return empty arrays
-- Be conservative: only report clear dependencies, not speculative ones
-- IMPORTANT: Proto/gRPC stub files (e.g., *_pb2_grpc.py, *.pb.go, *Grpc.java) contain client stubs for ALL services defined in the proto. Do NOT treat the presence of a stub as evidence that this service calls the other service. Only count it as a dependency if the service's own application code actually creates a client and makes calls to that service.
-- Service names in dependencies MUST match the registered service names exactly (e.g., use "checkoutservice" not "CheckoutService")`
+- IMPORTANT: If a file analysis lists a gRPC dependency on "ShippingService" and there is a registered service called "shippingservice", that IS a dependency — include it
+- IMPORTANT: Proto/gRPC stub files (e.g., *_pb2_grpc.py, *.pb.go, *Grpc.java) contain client stubs for ALL services. Do NOT treat stub presence alone as evidence. But if the service's APPLICATION code (main.go, server.py, etc.) creates clients and makes calls, those ARE real dependencies
+- Service names in dependencies MUST use the registered service names in lowercase (e.g., use "checkoutservice" not "CheckoutService")
+- When a dependency name maps to a registered service (noted with "→ maps to"), ALWAYS include it`
+
+// isProtoGeneratedFile returns true if the file path matches common protobuf-generated patterns.
+func isProtoGeneratedFile(path string) bool {
+	lower := strings.ToLower(path)
+	patterns := []string{
+		"_pb2.py", "_pb2_grpc.py", ".pb.go", "_grpc.pb.go",
+		"grpc.java", "_grpc.js", "_grpc.ts", ".pb.h", ".pb.cc",
+		"_pb2.pyi",
+	}
+	for _, p := range patterns {
+		if strings.HasSuffix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
 
 func buildLinkDiscoveryPrompt(newRepo *Repository, allRepos []Repository, analyses map[string]indexer.FileAnalysis, calls []flows.CrossServiceCall, _ *flows.Detector) string {
 	var b strings.Builder
@@ -236,10 +253,13 @@ func buildLinkDiscoveryPrompt(newRepo *Repository, allRepos []Repository, analys
 		b.WriteString(fmt.Sprintf("SUMMARY: %s\n\n", newRepo.Summary))
 	}
 
-	// Include entry points from analyses.
+	// Include entry points from analyses (skip proto-generated files).
 	b.WriteString("### Entry Points (exported functions/handlers)\n")
 	entryCount := 0
 	for filePath, analysis := range analyses {
+		if isProtoGeneratedFile(filePath) {
+			continue
+		}
 		for _, fn := range analysis.Functions {
 			if len(fn.Name) > 0 && fn.Name[0] >= 'A' && fn.Name[0] <= 'Z' {
 				b.WriteString(fmt.Sprintf("- %s in %s: %s\n", fn.Name, filePath, fn.Summary))
@@ -254,25 +274,50 @@ func buildLinkDiscoveryPrompt(newRepo *Repository, allRepos []Repository, analys
 		}
 	}
 
-	// Include detected outbound calls.
+	// Include detected outbound calls (skip calls from proto-generated files).
 	if len(calls) > 0 {
 		b.WriteString("\n### Detected Outbound Calls\n")
-		for i, call := range calls {
+		count := 0
+		for _, call := range calls {
+			if isProtoGeneratedFile(call.FilePath) {
+				continue
+			}
 			b.WriteString(fmt.Sprintf("- %s call to %s (%s) in %s:%d\n", call.Type, call.Target, call.Method, call.FilePath, call.Line))
-			if i > 50 {
+			count++
+			if count > 50 {
 				b.WriteString("(truncated)\n")
 				break
 			}
 		}
 	}
 
-	// Include dependencies from analyses.
+	// Build a name→service mapping for matching.
+	serviceNames := make(map[string]string)
+	for _, repo := range allRepos {
+		serviceNames[strings.ToLower(repo.Name)] = repo.Name
+	}
+	serviceNames[strings.ToLower(newRepo.Name)] = newRepo.Name
+
+	// Include dependencies from analyses (skip proto-generated files).
 	b.WriteString("\n### Dependencies from File Analyses\n")
 	depCount := 0
 	for filePath, analysis := range analyses {
+		if isProtoGeneratedFile(filePath) {
+			continue
+		}
 		for _, dep := range analysis.Dependencies {
 			if dep.Type == "api_call" || dep.Type == "grpc" || dep.Type == "database" || dep.Type == "event" {
-				b.WriteString(fmt.Sprintf("- %s depends on %s (%s)\n", filePath, dep.Name, dep.Type))
+				// Try to resolve the dependency name to a known service.
+				resolvedNote := ""
+				depLower := strings.ToLower(dep.Name)
+				for svcLower, svcName := range serviceNames {
+					if depLower == svcLower || strings.Contains(depLower, svcLower) ||
+						strings.Contains(svcLower, strings.TrimSuffix(depLower, "service")) {
+						resolvedNote = fmt.Sprintf(" → maps to registered service '%s'", svcName)
+						break
+					}
+				}
+				b.WriteString(fmt.Sprintf("- %s depends on %s (%s)%s\n", filePath, dep.Name, dep.Type, resolvedNote))
 				depCount++
 				if depCount > 30 {
 					break
@@ -284,7 +329,7 @@ func buildLinkDiscoveryPrompt(newRepo *Repository, allRepos []Repository, analys
 		}
 	}
 
-	b.WriteString("\nAnalyze the above and identify cross-service dependencies. Respond with JSON.\n")
+	b.WriteString("\nBased on the above evidence, identify ALL cross-service dependencies for " + newRepo.Name + ". Every gRPC dependency that maps to a registered service MUST be included. Respond with JSON.\n")
 
 	return b.String()
 }

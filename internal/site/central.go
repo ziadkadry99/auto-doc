@@ -6,18 +6,24 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
+
+	"github.com/ziadkadry99/auto-doc/internal/indexer"
 )
 
 // RepoInfo holds information about a registered repository for central site generation.
 type RepoInfo struct {
-	Name        string
-	DisplayName string
-	Summary     string
-	Status      string
-	FileCount   int
-	SourceType  string
-	DocsDir     string // path to the repo's .autodoc/docs/ directory
+	Name          string
+	DisplayName   string
+	Summary       string
+	Status        string
+	FileCount     int
+	SourceType    string
+	Language      string // primary programming language (e.g., "Go", "Python", "Java")
+	LastCommitSHA string // git commit SHA when last indexed
+	DocsDir       string // path to the repo's .autodoc/docs/ directory
 }
 
 // LinkInfo represents a cross-service dependency for site generation.
@@ -52,8 +58,18 @@ type CentralSiteGenerator struct {
 // It creates a staging docs directory with generated content and per-repo docs,
 // then delegates to the standard SiteGenerator for HTML rendering.
 func (g *CentralSiteGenerator) Generate() (int, error) {
+	// Clean up service summaries for better readability.
+	g.cleanSummaries()
+
+	// Augment LLM-discovered links with direct analysis-based detection.
+	g.augmentLinksFromAnalyses()
+
 	// Normalize links and flows before generating.
 	g.normalizeData()
+
+	// Synthesize canonical flows from the link topology.
+	// This replaces LLM-generated flows with well-structured, non-overlapping journeys.
+	g.synthesizeCanonicalFlows()
 
 	// Create staging docs directory.
 	stagingDir := filepath.Join(g.OutputDir, ".staging-docs")
@@ -136,8 +152,8 @@ func (g *CentralSiteGenerator) writeLandingPage(stagingDir string) error {
 	// Service cards table.
 	if len(g.Repos) > 0 {
 		b.WriteString("## Services\n\n")
-		b.WriteString("| Service | Status | Files | Type | Summary |\n")
-		b.WriteString("|---------|--------|-------|------|---------|\n")
+		b.WriteString("| Service | Stack | Files | Status | Summary |\n")
+		b.WriteString("|---------|-------|-------|--------|---------|\n")
 		for _, repo := range g.Repos {
 			displayName := repo.DisplayName
 			if displayName == "" {
@@ -147,14 +163,13 @@ func (g *CentralSiteGenerator) writeLandingPage(stagingDir string) error {
 			if len(summary) > 80 {
 				summary = summary[:77] + "..."
 			}
-			// Link to the repo's docs subdirectory.
 			link := fmt.Sprintf("[%s](%s/index.md)", displayName, repo.Name)
-			statusBadge := repo.Status
-			if statusBadge == "" {
-				statusBadge = "unknown"
+			stack := repo.Language
+			if stack == "" {
+				stack = repo.SourceType
 			}
 			b.WriteString(fmt.Sprintf("| %s | %s | %d | %s | %s |\n",
-				link, statusBadge, repo.FileCount, repo.SourceType, summary))
+				link, stack, repo.FileCount, repo.Status, summary))
 		}
 		b.WriteString("\n")
 	}
@@ -174,6 +189,19 @@ func (g *CentralSiteGenerator) writeLandingPage(stagingDir string) error {
 		}
 		b.WriteString("\n")
 	}
+
+	// Generation metadata.
+	b.WriteString("---\n\n")
+	b.WriteString(fmt.Sprintf("*Generated on %s by [autodoc](https://github.com/ziadkadry99/auto-doc) — %d services, %d files total*\n",
+		time.Now().UTC().Format("2006-01-02 15:04 UTC"),
+		len(g.Repos),
+		func() int {
+			total := 0
+			for _, r := range g.Repos {
+				total += r.FileCount
+			}
+			return total
+		}()))
 
 	return os.WriteFile(filepath.Join(stagingDir, "index.md"), []byte(b.String()), 0o644)
 }
@@ -223,8 +251,8 @@ func (g *CentralSiteGenerator) writeSystemOverview(stagingDir string) error {
 	// Services table.
 	if len(g.Repos) > 0 {
 		b.WriteString("## Registered Services\n\n")
-		b.WriteString("| Service | Status | Files | Type | Summary |\n")
-		b.WriteString("|---------|--------|-------|------|---------|\n")
+		b.WriteString("| Service | Stack | Files | Status | Commit | Summary |\n")
+		b.WriteString("|---------|-------|-------|--------|--------|---------|\n")
 		for _, repo := range g.Repos {
 			displayName := repo.DisplayName
 			if displayName == "" {
@@ -234,8 +262,16 @@ func (g *CentralSiteGenerator) writeSystemOverview(stagingDir string) error {
 			if len(summary) > 100 {
 				summary = summary[:97] + "..."
 			}
-			b.WriteString(fmt.Sprintf("| **%s** | %s | %d | %s | %s |\n",
-				displayName, repo.Status, repo.FileCount, repo.SourceType, summary))
+			stack := repo.Language
+			if stack == "" {
+				stack = repo.SourceType
+			}
+			commitDisplay := ""
+			if len(repo.LastCommitSHA) >= 7 {
+				commitDisplay = "`" + repo.LastCommitSHA[:7] + "`"
+			}
+			b.WriteString(fmt.Sprintf("| **%s** | %s | %d | %s | %s | %s |\n",
+				displayName, stack, repo.FileCount, repo.Status, commitDisplay, summary))
 		}
 		b.WriteString("\n")
 	}
@@ -737,6 +773,139 @@ func copyDir(src, dst string) error {
 	})
 }
 
+// cleanSummaries rewrites service summaries to remove file-centric language
+// like "The file defines..." or "To provide..." that reads awkwardly in documentation.
+func (g *CentralSiteGenerator) cleanSummaries() {
+	replacements := []struct {
+		prefix      string
+		replacement string
+	}{
+		{"The file defines ", "Defines "},
+		{"This file defines ", "Defines "},
+		{"The file implements ", "Implements "},
+		{"This file implements ", "Implements "},
+		{"To provide ", "Provides "},
+		{"To implement ", "Implements "},
+		{"The purpose of this service is to serve ", "Serves "},
+		{"The purpose of this service is to provide ", "Provides "},
+		{"The purpose of this service is to ", ""},
+	}
+
+	for i, r := range g.Repos {
+		for _, rep := range replacements {
+			if strings.HasPrefix(r.Summary, rep.prefix) {
+				cleaned := rep.replacement + r.Summary[len(rep.prefix):]
+				// Capitalize first letter.
+				if len(cleaned) > 0 && cleaned[0] >= 'a' && cleaned[0] <= 'z' {
+					cleaned = strings.ToUpper(cleaned[:1]) + cleaned[1:]
+				}
+				g.Repos[i].Summary = cleaned
+				break
+			}
+		}
+	}
+}
+
+// augmentLinksFromAnalyses extracts gRPC/API dependencies directly from each repo's
+// analyses.json and creates links to matching registered repos. This provides
+// reliable link detection independent of LLM quality.
+func (g *CentralSiteGenerator) augmentLinksFromAnalyses() {
+	// Build a lookup from various name forms to repo names.
+	repoLookup := make(map[string]string) // lowercase name → repo name
+	for _, r := range g.Repos {
+		repoLookup[strings.ToLower(r.Name)] = r.Name
+	}
+
+	// Proto-generated file patterns to skip.
+	protoPatterns := []string{
+		"_pb2.py", "_pb2_grpc.py", ".pb.go", "_grpc.pb.go",
+		"grpc.java", "_grpc.js", "_grpc.ts",
+	}
+	isProto := func(path string) bool {
+		lower := strings.ToLower(path)
+		for _, p := range protoPatterns {
+			if strings.HasSuffix(lower, p) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Try to match a dependency name to a registered repo.
+	matchDep := func(depName string) string {
+		lower := strings.ToLower(depName)
+		// Direct match.
+		if name, ok := repoLookup[lower]; ok {
+			return name
+		}
+		// Try with "service" suffix removed/added.
+		for _, suffix := range []string{"service", "grpc", "client"} {
+			trimmed := strings.TrimSuffix(lower, suffix)
+			if trimmed != lower {
+				if name, ok := repoLookup[trimmed+"service"]; ok {
+					return name
+				}
+				if name, ok := repoLookup[trimmed]; ok {
+					return name
+				}
+			}
+		}
+		// Substring match: if dep name contains a repo name.
+		for repoLower, repoName := range repoLookup {
+			if strings.Contains(lower, repoLower) {
+				return repoName
+			}
+		}
+		return ""
+	}
+
+	// Existing link set (to avoid duplicates).
+	existingLinks := make(map[string]bool)
+	for _, l := range g.Links {
+		key := strings.ToLower(l.FromRepo) + "->" + strings.ToLower(l.ToRepo)
+		existingLinks[key] = true
+	}
+
+	// For each repo, load analyses and extract gRPC/API deps.
+	for _, repo := range g.Repos {
+		if repo.DocsDir == "" {
+			continue
+		}
+		// DocsDir is like /path/to/repo/.autodoc/docs — analyses.json is in .autodoc/
+		autodocDir := filepath.Dir(repo.DocsDir)
+		analyses, err := indexer.LoadAnalyses(filepath.Dir(autodocDir))
+		if err != nil {
+			continue
+		}
+
+		for filePath, analysis := range analyses {
+			if isProto(filePath) {
+				continue
+			}
+			for _, dep := range analysis.Dependencies {
+				if dep.Type != "grpc" && dep.Type != "api_call" {
+					continue
+				}
+				target := matchDep(dep.Name)
+				if target == "" || target == repo.Name {
+					continue // no match or self-reference
+				}
+				key := strings.ToLower(repo.Name) + "->" + strings.ToLower(target)
+				if existingLinks[key] {
+					continue
+				}
+				existingLinks[key] = true
+				g.Links = append(g.Links, LinkInfo{
+					FromRepo: repo.Name,
+					ToRepo:   target,
+					LinkType: dep.Type,
+					Reason:   fmt.Sprintf("%s calls %s via %s", repo.Name, target, dep.Type),
+				})
+			}
+		}
+	}
+}
+
 // normalizeData cleans up links and flows before site generation:
 //   - Normalizes link FromRepo/ToRepo to match registered repo names (case-insensitive)
 //   - Removes self-loops (FromRepo == ToRepo)
@@ -786,6 +955,19 @@ func (g *CentralSiteGenerator) normalizeData() {
 			continue
 		}
 
+		// Skip links where source or target doesn't match any registered repo.
+		if _, ok := repoLookup[strings.ToLower(link.FromRepo)]; !ok {
+			continue
+		}
+		if _, ok := repoLookup[strings.ToLower(link.ToRepo)]; !ok {
+			continue
+		}
+
+		// Clean up reason strings: remove implementation artifacts.
+		if idx := strings.Index(link.Reason, " (detected from"); idx > 0 {
+			link.Reason = link.Reason[:idx]
+		}
+
 		// Deduplicate by from+to pair.
 		key := link.FromRepo + "->" + link.ToRepo
 		if seen[key] {
@@ -795,42 +977,429 @@ func (g *CentralSiteGenerator) normalizeData() {
 		cleanLinks = append(cleanLinks, link)
 	}
 
-	// Filter fan-out false positives: if a single service has outbound links
-	// to more than 60% of all other services, those links are likely from
-	// shared proto/interface stubs, not real dependencies.
-	if len(g.Repos) > 3 {
-		threshold := int(float64(len(g.Repos)-1) * 0.6)
-		outCount := make(map[string]int)
-		for _, link := range cleanLinks {
-			outCount[link.FromRepo]++
-		}
-		var filtered []LinkInfo
-		for _, link := range cleanLinks {
-			if outCount[link.FromRepo] > threshold {
-				continue // skip fan-out links
-			}
-			filtered = append(filtered, link)
-		}
-		cleanLinks = filtered
-	}
-
 	g.Links = cleanLinks
 
-	// Deduplicate flows by name (keep the one with the most services).
-	flowMap := make(map[string]int) // name -> index in deduped list
-	var cleanFlows []FlowInfo
+	// Deduplicate flows using concept-based grouping.
+	// Many LLM-generated flows describe the same concept with different names
+	// (e.g., "Checkout", "Place Order", "Order Placement", "Checkout Process").
+	// Group by canonical concept, then pick the best representative from each group.
+	conceptGroups := make(map[string][]FlowInfo)
 	for _, f := range g.Flows {
-		if idx, exists := flowMap[f.Name]; exists {
-			// Keep the one with more services.
-			if len(f.Services) > len(cleanFlows[idx].Services) {
-				cleanFlows[idx] = f
-			}
-			continue
-		}
-		flowMap[f.Name] = len(cleanFlows)
-		cleanFlows = append(cleanFlows, f)
+		concept := canonicalFlowConcept(f.Name)
+		conceptGroups[concept] = append(conceptGroups[concept], f)
 	}
+
+	var cleanFlows []FlowInfo
+	for _, group := range conceptGroups {
+		// Pick the best flow from the group: most services, then longest narrative.
+		best := group[0]
+		for _, f := range group[1:] {
+			if len(f.Services) > len(best.Services) ||
+				(len(f.Services) == len(best.Services) && len(f.Narrative) > len(best.Narrative)) {
+				best = f
+			}
+		}
+		// Merge services from all flows in the group.
+		svcSet := make(map[string]bool)
+		for _, f := range group {
+			for _, s := range f.Services {
+				svcSet[strings.ToLower(s)] = true
+			}
+		}
+		var mergedServices []string
+		for s := range svcSet {
+			mergedServices = append(mergedServices, s)
+		}
+		best.Services = mergedServices
+		cleanFlows = append(cleanFlows, best)
+	}
+
+	// Consolidate trivial flows (≤2 services) into a composite flow.
+	// Single-arrow flows like "Ad Display" or "Currency Conversion" are more useful
+	// when presented as a group of frontend interactions.
+	var substantialFlows []FlowInfo
+	var trivialFlows []FlowInfo
+	for _, f := range cleanFlows {
+		if len(f.Services) <= 2 {
+			trivialFlows = append(trivialFlows, f)
+		} else {
+			substantialFlows = append(substantialFlows, f)
+		}
+	}
+
+	if len(trivialFlows) >= 2 {
+		// Merge trivial flows into a composite.
+		svcSet := make(map[string]bool)
+		var narrativeParts []string
+		for _, f := range trivialFlows {
+			for _, s := range f.Services {
+				svcSet[strings.ToLower(s)] = true
+			}
+			desc := f.Name
+			if f.Narrative != "" {
+				desc = f.Narrative
+			} else if f.Description != "" {
+				desc = f.Description
+			}
+			narrativeParts = append(narrativeParts, "- **"+f.Name+"**: "+desc)
+		}
+		var svcList []string
+		for s := range svcSet {
+			svcList = append(svcList, s)
+		}
+		composite := FlowInfo{
+			Name:      "Service Interactions",
+			Narrative: "Individual service-to-service interactions that support the overall system:\n\n" + strings.Join(narrativeParts, "\n"),
+			Services:  svcList,
+		}
+		substantialFlows = append(substantialFlows, composite)
+	} else {
+		substantialFlows = append(substantialFlows, trivialFlows...)
+	}
+	cleanFlows = substantialFlows
+
+	// Sort flows: most services first (broader flows are more important).
+	sort.Slice(cleanFlows, func(i, j int) bool {
+		if len(cleanFlows[i].Services) != len(cleanFlows[j].Services) {
+			return len(cleanFlows[i].Services) > len(cleanFlows[j].Services)
+		}
+		return cleanFlows[i].Name < cleanFlows[j].Name
+	})
+
+	// Generate sequence diagrams for flows that don't already have one.
+	for i, f := range cleanFlows {
+		if f.Diagram == "" {
+			cleanFlows[i].Diagram = g.generateSequenceDiagram(f)
+		}
+	}
+
 	g.Flows = cleanFlows
+}
+
+// canonicalFlowConcept maps a flow name to a canonical concept for deduplication.
+// "Checkout", "Place Order", "Order Placement", "Checkout Process" -> "checkout"
+// "Product Browsing", "Product Browsing and Purchase" -> "browsing"
+func canonicalFlowConcept(name string) string {
+	lower := strings.ToLower(name)
+
+	// Define concept keywords. Order matters — first match wins.
+	// "purchase" and "order" grouped with checkout since they describe the same end-to-end flow.
+	concepts := []struct {
+		concept  string
+		keywords []string
+	}{
+		{"checkout", []string{"checkout", "place order", "order placement", "order processing", "purchase", "order confirm"}},
+		{"browsing", []string{"browsing", "browse", "product catalog", "product listing"}},
+		{"recommendation", []string{"recommend"}},
+		{"cart", []string{"cart", "add item", "add to cart"}},
+		{"payment", []string{"payment", "pay ", "charge"}},
+		{"shipping", []string{"shipping", "ship ", "delivery"}},
+		{"currency", []string{"currency", "conversion"}},
+		{"email", []string{"email", "notification"}},
+		{"ad", []string{" ad ", "advert", "ad display"}},
+	}
+
+	for _, c := range concepts {
+		for _, kw := range c.keywords {
+			if strings.Contains(lower, kw) {
+				return c.concept
+			}
+		}
+	}
+
+	// Fallback: use the name itself.
+	return lower
+}
+
+// operationLabel derives a meaningful operation label for a sequence diagram arrow
+// from a link's reason, endpoints, and target service name.
+func operationLabel(link LinkInfo) string {
+	// Use the first endpoint if available.
+	if len(link.Endpoints) > 0 && link.Endpoints[0] != "" {
+		return link.Endpoints[0]
+	}
+
+	// Try to extract an operation from the reason.
+	reason := link.Reason
+	if reason != "" {
+		// Remove "(detected from ...)" artifacts.
+		if idx := strings.Index(reason, " (detected from"); idx > 0 {
+			reason = reason[:idx]
+		}
+		// If the reason starts with "Calls X to ...", extract the action.
+		if strings.HasPrefix(reason, "Calls ") {
+			if toIdx := strings.Index(reason, " to "); toIdx > 0 {
+				action := reason[toIdx+4:]
+				if len(action) > 40 {
+					action = action[:37] + "..."
+				}
+				return action
+			}
+		}
+	}
+
+	// Derive a label from the target service name.
+	// Use well-known gRPC operation names for common microservice patterns.
+	target := strings.TrimSuffix(strings.ToLower(link.ToRepo), "service")
+	knownOps := map[string]string{
+		"productcatalog": "ListProducts()",
+		"cart":           "GetCart() / EmptyCart()",
+		"currency":       "Convert()",
+		"shipping":       "GetQuote() / ShipOrder()",
+		"checkout":       "PlaceOrder()",
+		"payment":        "Charge()",
+		"email":          "SendConfirmation()",
+		"ad":             "GetAds()",
+		"recommendation": "ListRecommendations()",
+	}
+	if op, ok := knownOps[target]; ok {
+		return op
+	}
+
+	return link.LinkType
+}
+
+// generateSequenceDiagram creates a Mermaid sequence diagram for a flow
+// based on its services and the known cross-service links.
+func (g *CentralSiteGenerator) generateSequenceDiagram(flow FlowInfo) string {
+	if len(flow.Services) < 2 {
+		return ""
+	}
+
+	// Build set of services in this flow.
+	flowSvcs := make(map[string]bool)
+	for _, s := range flow.Services {
+		flowSvcs[strings.ToLower(s)] = true
+	}
+
+	// Collect links relevant to this flow (both endpoints in the flow's service set).
+	type edge struct {
+		from, to, label string
+	}
+	var edges []edge
+	for _, link := range g.Links {
+		fromLower := strings.ToLower(link.FromRepo)
+		toLower := strings.ToLower(link.ToRepo)
+		if flowSvcs[fromLower] && flowSvcs[toLower] {
+			edges = append(edges, edge{link.FromRepo, link.ToRepo, operationLabel(link)})
+		}
+	}
+
+	if len(edges) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("sequenceDiagram\n")
+
+	// Define participants in a logical order (try to put the initiator first).
+	// Count outgoing edges to find the initiator.
+	outCount := make(map[string]int)
+	for _, e := range edges {
+		outCount[e.from]++
+	}
+	// Sort services: most outgoing first (likely initiator).
+	type svcCount struct {
+		name  string
+		count int
+	}
+	var sorted []svcCount
+	for _, s := range flow.Services {
+		sorted = append(sorted, svcCount{s, outCount[s]})
+	}
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].count > sorted[i].count {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	for _, s := range sorted {
+		b.WriteString(fmt.Sprintf("    participant %s\n", s.name))
+	}
+
+	// Write edges as sequence arrows.
+	for _, e := range edges {
+		b.WriteString(fmt.Sprintf("    %s->>%s: %s\n", e.from, e.to, e.label))
+	}
+
+	return b.String()
+}
+
+// synthesizeCanonicalFlows generates distinct, non-overlapping user journey flows
+// directly from the link topology instead of relying on LLM-generated flows.
+// Each flow represents a specific user journey through the system.
+func (g *CentralSiteGenerator) synthesizeCanonicalFlows() {
+	if len(g.Links) == 0 {
+		return
+	}
+
+	// Build adjacency: from -> list of (to, link)
+	type target struct {
+		to   string
+		link LinkInfo
+	}
+	adj := make(map[string][]target)
+	for _, link := range g.Links {
+		adj[strings.ToLower(link.FromRepo)] = append(adj[strings.ToLower(link.FromRepo)], target{
+			to:   strings.ToLower(link.ToRepo),
+			link: link,
+		})
+	}
+
+	// Find orchestrators (services with ≥3 outbound connections).
+	type orchestrator struct {
+		name    string
+		targets []target
+	}
+	var orchestrators []orchestrator
+	for from, targets := range adj {
+		if len(targets) >= 3 {
+			orchestrators = append(orchestrators, orchestrator{from, targets})
+		}
+	}
+
+	// Sort orchestrators by number of targets (most first = broadest flow first).
+	sort.Slice(orchestrators, func(i, j int) bool {
+		return len(orchestrators[i].targets) > len(orchestrators[j].targets)
+	})
+
+	var flows []FlowInfo
+
+	// Build lookup for repo display names.
+	nameMap := make(map[string]string)
+	for _, r := range g.Repos {
+		nameMap[strings.ToLower(r.Name)] = r.Name
+	}
+	displayName := func(lower string) string {
+		if n, ok := nameMap[lower]; ok {
+			return n
+		}
+		return lower
+	}
+
+	// Track which from->to edges have been used in flows.
+	usedEdges := make(map[string]bool)
+
+	for _, orch := range orchestrators {
+		// Group targets by role/concept.
+		var directTargets []string
+		for _, t := range orch.targets {
+			directTargets = append(directTargets, displayName(t.to))
+		}
+
+		// Build services list and sequence diagram.
+		svcSet := make(map[string]bool)
+		svcSet[displayName(orch.name)] = true
+		for _, t := range orch.targets {
+			svcSet[displayName(t.to)] = true
+		}
+
+		var svcList []string
+		for s := range svcSet {
+			svcList = append(svcList, s)
+		}
+		sort.Strings(svcList)
+
+		// Build narrative.
+		orchDisplay := displayName(orch.name)
+		var narrative string
+		switch {
+		case strings.Contains(orch.name, "frontend"):
+			narrative = fmt.Sprintf("The %s serves as the user-facing entry point, coordinating with %d backend services to provide a seamless shopping experience. ",
+				orchDisplay, len(orch.targets))
+			narrative += "Users can browse products, view pricing in different currencies, manage their shopping cart, view personalized recommendations, see relevant ads, and initiate checkout — "
+			narrative += fmt.Sprintf("each backed by a dedicated microservice: %s.", strings.Join(directTargets, ", "))
+		case strings.Contains(orch.name, "checkout"):
+			narrative = fmt.Sprintf("The %s orchestrates the order placement process by coordinating with %d backend services. ",
+				orchDisplay, len(orch.targets))
+			narrative += "When a customer places an order, the service retrieves the cart contents, resolves product details and pricing, "
+			narrative += "calculates shipping costs, processes the payment, sends a confirmation email, and empties the cart."
+		default:
+			narrative = fmt.Sprintf("%s coordinates with %d services: %s.",
+				orchDisplay, len(orch.targets), strings.Join(directTargets, ", "))
+		}
+
+		// Build sequence diagram.
+		var diagram strings.Builder
+		diagram.WriteString("sequenceDiagram\n")
+		diagram.WriteString(fmt.Sprintf("    participant %s\n", orchDisplay))
+		for _, t := range orch.targets {
+			diagram.WriteString(fmt.Sprintf("    participant %s\n", displayName(t.to)))
+		}
+		for _, t := range orch.targets {
+			label := operationLabel(t.link)
+			diagram.WriteString(fmt.Sprintf("    %s->>%s: %s\n", orchDisplay, displayName(t.to), label))
+			usedEdges[orch.name+"->"+t.to] = true
+		}
+
+		// Choose a meaningful name.
+		flowName := orchDisplay + " Interactions"
+		if strings.Contains(orch.name, "frontend") {
+			flowName = "User Shopping Journey"
+		} else if strings.Contains(orch.name, "checkout") {
+			flowName = "Order Processing"
+		}
+
+		flows = append(flows, FlowInfo{
+			Name:      flowName,
+			Narrative: narrative,
+			Services:  svcList,
+			Diagram:   diagram.String(),
+		})
+	}
+
+	// Collect remaining edges not covered by orchestrator flows.
+	var remainingEdges []LinkInfo
+	for _, link := range g.Links {
+		key := strings.ToLower(link.FromRepo) + "->" + strings.ToLower(link.ToRepo)
+		if !usedEdges[key] {
+			remainingEdges = append(remainingEdges, link)
+		}
+	}
+
+	if len(remainingEdges) > 0 {
+		svcSet := make(map[string]bool)
+		for _, link := range remainingEdges {
+			svcSet[link.FromRepo] = true
+			svcSet[link.ToRepo] = true
+		}
+		var svcList []string
+		for s := range svcSet {
+			svcList = append(svcList, s)
+		}
+		sort.Strings(svcList)
+
+		var narrativeParts []string
+		var diagram strings.Builder
+		diagram.WriteString("sequenceDiagram\n")
+		participants := make(map[string]bool)
+		for _, link := range remainingEdges {
+			if !participants[link.FromRepo] {
+				diagram.WriteString(fmt.Sprintf("    participant %s\n", link.FromRepo))
+				participants[link.FromRepo] = true
+			}
+			if !participants[link.ToRepo] {
+				diagram.WriteString(fmt.Sprintf("    participant %s\n", link.ToRepo))
+				participants[link.ToRepo] = true
+			}
+		}
+		for _, link := range remainingEdges {
+			label := operationLabel(link)
+			diagram.WriteString(fmt.Sprintf("    %s->>%s: %s\n", link.FromRepo, link.ToRepo, label))
+			narrativeParts = append(narrativeParts, fmt.Sprintf("%s calls %s (%s)", link.FromRepo, link.ToRepo, label))
+		}
+
+		flows = append(flows, FlowInfo{
+			Name:      "Supporting Service Calls",
+			Narrative: "Additional service-to-service interactions that support the main user flows:\n\n- " + strings.Join(narrativeParts, "\n- "),
+			Services:  svcList,
+			Diagram:   diagram.String(),
+		})
+	}
+
+	// Replace the LLM flows with synthesized ones.
+	g.Flows = flows
 }
 
 // copyFile copies a single file.

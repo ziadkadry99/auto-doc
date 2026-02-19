@@ -181,7 +181,7 @@ func generateRepoSummary(analyses map[string]indexer.FileAnalysis) string {
 
 	// Find a file that looks like a main entry point for a summary.
 	for _, a := range analyses {
-		if a.Purpose != "" && entryPoints[filepath.Base(a.FilePath)] {
+		if a.Purpose != "" && entryPoints[filepath.Base(a.FilePath)] && !isGenericSummary(a.Purpose) {
 			return a.Purpose
 		}
 	}
@@ -194,8 +194,9 @@ func generateRepoSummary(analyses map[string]indexer.FileAnalysis) string {
 	}
 
 	// Try source files whose name contains "server", "service", "main", or "app".
+	// First pass: skip generic summaries and test files.
 	for _, a := range analyses {
-		if a.Purpose == "" {
+		if a.Purpose == "" || isGenericSummary(a.Purpose) || isTestFile(a.FilePath) {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(a.FilePath))
@@ -210,14 +211,31 @@ func generateRepoSummary(analyses map[string]indexer.FileAnalysis) string {
 		}
 	}
 
-	// Try any source code file with a non-empty Purpose.
+	// Try any non-test source code file with a non-generic Purpose.
 	for _, a := range analyses {
-		if a.Purpose == "" {
+		if a.Purpose == "" || isGenericSummary(a.Purpose) || isTestFile(a.FilePath) {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(a.FilePath))
 		if sourceExts[ext] {
 			return a.Purpose
+		}
+	}
+
+	// Fallback: accept generic summaries from keyword-matching non-test source files.
+	for _, a := range analyses {
+		if a.Purpose == "" || isTestFile(a.FilePath) {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(a.FilePath))
+		if !sourceExts[ext] {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(a.FilePath))
+		for _, keyword := range []string{"server", "service", "main", "app"} {
+			if strings.Contains(base, keyword) {
+				return a.Purpose
+			}
 		}
 	}
 
@@ -232,6 +250,49 @@ func generateRepoSummary(analyses map[string]indexer.FileAnalysis) string {
 		return fmt.Sprintf("%s project with %d files", topLang, len(analyses))
 	}
 	return fmt.Sprintf("%d files indexed", len(analyses))
+}
+
+// isGenericSummary returns true if a purpose string is too generic to use as a service summary.
+// Only filters truly boilerplate descriptions (startup, config, build, test, infrastructure)
+// while keeping functional descriptions even if they start with "The file..." or "This file...".
+func isGenericSummary(purpose string) bool {
+	lower := strings.ToLower(purpose)
+	genericPrefixes := []string{
+		"to bootstrap", "to start the", "to configure", "to set up",
+		"to initialize", "to run the", "to provide a client",
+		"configures the", "sets up the", "initializes the",
+		"defines the main entry", "entry point for",
+		"to verify", "to test",
+		"configuration file for", "specifies files",
+		"defines the project", "defines the build",
+		"to create a docker", "to reduce the size",
+		"provides configuration settings",
+		"provides a configured logger",
+		"provides a platform-independent",
+		"provides a convenient way to execute",
+	}
+	for _, prefix := range genericPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	// Filter infrastructure purposes.
+	genericContains := []string{
+		"health check", "logging framework", "logging configuration",
+	}
+	for _, kw := range genericContains {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTestFile returns true if the file path looks like a test file.
+func isTestFile(filePath string) bool {
+	lower := strings.ToLower(filepath.Base(filePath))
+	return strings.Contains(lower, "test") || strings.Contains(lower, "spec") ||
+		strings.HasSuffix(lower, "_test.go") || strings.HasSuffix(lower, "_test.py")
 }
 
 func hasExcludedPrefix(path string) bool {

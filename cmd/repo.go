@@ -457,6 +457,24 @@ func runRepoSyncAll(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("persisting vector store: %w", err)
 	}
 
+	// Re-discover cross-service links for all repos (needs full set for accuracy).
+	llmProvider, llmErr := createLLMProviderFromConfig(cfg)
+	if llmErr == nil {
+		ctxStore := contextengine.NewStore(database)
+		flowStore := flows.NewStore(database)
+		linker := registry.NewLinker(repoStore, ctxStore, flowStore)
+		fmt.Fprintf(os.Stderr, "\nDiscovering cross-service links...\n")
+		for _, r := range repos {
+			repo := r
+			fmt.Fprintf(os.Stderr, "  Analyzing %s...\n", repo.Name)
+			if linkErr := linker.DiscoverLinks(context.Background(), &repo, llmProvider, cfg.Model); linkErr != nil {
+				fmt.Fprintf(os.Stderr, "  Warning: link discovery failed for %s: %v\n", repo.Name, linkErr)
+			}
+		}
+		allLinks, _ := repoStore.GetLinks(context.Background(), "")
+		fmt.Fprintf(os.Stderr, "  Total cross-service links: %d\n", len(allLinks))
+	}
+
 	if len(errors) > 0 {
 		fmt.Fprintf(os.Stderr, "\nErrors:\n%s\n", strings.Join(errors, "\n"))
 	}

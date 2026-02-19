@@ -10,6 +10,7 @@ import (
 
 	"github.com/ziadkadry99/auto-doc/internal/config"
 	"github.com/ziadkadry99/auto-doc/internal/flows"
+	"github.com/ziadkadry99/auto-doc/internal/indexer"
 	"github.com/ziadkadry99/auto-doc/internal/llm"
 	"github.com/ziadkadry99/auto-doc/internal/registry"
 	"github.com/ziadkadry99/auto-doc/internal/site"
@@ -147,14 +148,19 @@ func runCentralSite(cfg *config.Config, outputDir, projectName string) (int, err
 		if _, statErr := os.Stat(docsDir); os.IsNotExist(statErr) {
 			docsDir = "" // No docs available for this repo.
 		}
+		// Detect primary language from analyses.
+		lang := detectRepoLanguage(r.LocalPath)
+
 		siteRepos[i] = site.RepoInfo{
-			Name:        r.Name,
-			DisplayName: r.DisplayName,
-			Summary:     r.Summary,
-			Status:      r.Status,
-			FileCount:   r.FileCount,
-			SourceType:  r.SourceType,
-			DocsDir:     docsDir,
+			Name:          r.Name,
+			DisplayName:   r.DisplayName,
+			Summary:       r.Summary,
+			Status:        r.Status,
+			FileCount:     r.FileCount,
+			SourceType:    r.SourceType,
+			Language:      lang,
+			LastCommitSHA: r.LastCommitSHA,
+			DocsDir:       docsDir,
 		}
 	}
 
@@ -200,4 +206,33 @@ func runCentralSite(cfg *config.Config, outputDir, projectName string) (int, err
 
 	fmt.Printf("Generating central site for %d repositories...\n", len(repos))
 	return gen.Generate()
+}
+
+// detectRepoLanguage determines the primary programming language of a repo from its analyses.
+func detectRepoLanguage(repoPath string) string {
+	analyses, err := indexer.LoadAnalyses(repoPath)
+	if err != nil || len(analyses) == 0 {
+		return ""
+	}
+	// Skip non-programming "languages" when counting.
+	skip := map[string]bool{
+		"unknown": true, "": true, "YAML": true, "Docker": true,
+		"JSON": true, "XML": true, "Markdown": true, "Text": true,
+		"TOML": true, "INI": true, "Properties": true, "Shell": true,
+	}
+	langCount := make(map[string]int)
+	for _, a := range analyses {
+		if a.Language != "" && !skip[a.Language] {
+			langCount[a.Language]++
+		}
+	}
+	topLang := ""
+	topCount := 0
+	for lang, count := range langCount {
+		if count > topCount {
+			topLang = lang
+			topCount = count
+		}
+	}
+	return topLang
 }
