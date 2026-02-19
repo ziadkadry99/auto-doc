@@ -2,6 +2,7 @@ package docs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,7 +102,24 @@ Analyze failure modes and single points of failure (SPOFs). For each service/com
 List each service with its failure classification and explain why.
 
 ===PATTERNS===
-List design patterns used, one per line.`, summary.String(), depSummary.String())
+List design patterns used, one per line.
+
+===ARCH_DIAGRAM===
+Generate a JSON architecture diagram that shows how this system is structured.
+Think like an architect drawing a system diagram on a whiteboard — show the key layers, how data enters the system, flows through processing, and where it ends up.
+
+The JSON must follow this exact schema:
+{"nodes":[{"id":"unique_id","label":"Short Name","desc":"Brief description","group":"LayerName"}],"edges":[{"from":"source_id","to":"target_id","label":"optional relationship"}]}
+
+Guidelines:
+- Use 4-8 nodes maximum. Combine related things into logical architectural layers (e.g. "User Interface" not individual CLI commands).
+- Group nodes into meaningful architectural layers like "Presentation", "Processing", "Data", "External" — use whatever layer names make sense for THIS project.
+- Edges should represent actual data flow or control flow, not just "these exist together". Label edges with what flows between them (e.g. "source files", "API requests", "embeddings").
+- Think about what a senior engineer would draw to explain the system to a new team member.
+- Do NOT just list every module as a separate box. Abstract into architectural concepts.
+- Node IDs must use only alphanumerics and underscores.
+
+Output ONLY the raw JSON on a single line, no markdown formatting, no code fences.`, summary.String(), depSummary.String())
 
 	resp, err := provider.Complete(ctx, llm.CompletionRequest{
 		Model: model,
@@ -131,64 +149,6 @@ List design patterns used, one per line.`, summary.String(), depSummary.String()
 	}
 	if len(depMap) > 0 {
 		data.DepDiagram = diagrams.DependencyDiagram(depMap)
-	}
-
-	// Build architecture diagram from parsed components and service dependencies.
-	if len(data.Components) > 1 {
-		// Cap at 12 components for readability.
-		if len(data.Components) > 12 {
-			data.Components = data.Components[:12]
-		}
-
-		// Assign layer groups via keyword matching for visual grouping.
-		type layerInfo struct {
-			name     string
-			keywords []string
-		}
-		layers := []layerInfo{
-			{"Interface", []string{"cli", "command", "api", "endpoint", "server", "handler", "http", "grpc", "mcp", "ui", "frontend", "gateway", "route"}},
-			{"Core", []string{"engine", "core", "index", "pipeline", "process", "analyz", "logic", "walker", "traversal", "service", "manager"}},
-			{"Storage", []string{"store", "storage", "database", "db", "vector", "embed", "persist", "cache", "queue", "redis", "mongo"}},
-			{"Output", []string{"output", "doc", "generat", "render", "template", "diagram", "site", "report", "format", "export"}},
-		}
-		for i := range data.Components {
-			lower := strings.ToLower(data.Components[i].Name + " " + data.Components[i].Description)
-			for _, l := range layers {
-				matched := false
-				for _, kw := range l.keywords {
-					if strings.Contains(lower, kw) {
-						data.Components[i].Group = l.name
-						matched = true
-						break
-					}
-				}
-				if matched {
-					break
-				}
-			}
-			if data.Components[i].Group == "" {
-				data.Components[i].Group = "Core"
-			}
-		}
-
-		rels := parseServiceDependencies(data.ServiceDependencies, data.Components)
-		// Fallback: if no relationships were parsed, connect adjacent layers
-		// top-down for a clean flow instead of a star pattern.
-		if len(rels) == 0 {
-			var layerReps []string
-			for _, l := range layers {
-				for _, c := range data.Components {
-					if c.Group == l.name {
-						layerReps = append(layerReps, c.Name)
-						break
-					}
-				}
-			}
-			for i := 0; i < len(layerReps)-1; i++ {
-				rels = append(rels, diagrams.Relationship{From: layerReps[i], To: layerReps[i+1]})
-			}
-		}
-		data.ArchDiagram = diagrams.ArchitectureDiagram(data.Components, rels)
 	}
 
 	tmpl, err := template.New("arch").Funcs(templateFuncs).Parse(architectureTemplate)
@@ -226,6 +186,7 @@ func parseArchResponse(content string) archData {
 		"===EXIT_POINTS===",
 		"===DATAFLOW===",
 		"===PATTERNS===",
+		"===ARCH_DIAGRAM===",
 	}
 
 	// findEnd returns the index of the nearest following section marker.
@@ -347,6 +308,23 @@ func parseArchResponse(content string) archData {
 		}
 	}
 
+	// Parse architecture diagram JSON.
+	if idx := strings.Index(content, "===ARCH_DIAGRAM==="); idx >= 0 {
+		after := content[idx+len("===ARCH_DIAGRAM==="):]
+		end := findEnd(after, "===ARCH_DIAGRAM===")
+		raw := strings.TrimSpace(after[:end])
+		// Strip markdown code fences if the LLM wrapped the JSON.
+		raw = strings.TrimPrefix(raw, "```json")
+		raw = strings.TrimPrefix(raw, "```")
+		raw = strings.TrimSuffix(raw, "```")
+		raw = strings.TrimSpace(raw)
+		// Validate it's actual JSON before using it.
+		var diag diagrams.DiagramData
+		if json.Unmarshal([]byte(raw), &diag) == nil && len(diag.Nodes) > 0 {
+			data.ArchDiagram = raw
+		}
+	}
+
 	// Parse patterns.
 	if idx := strings.Index(content, "===PATTERNS==="); idx >= 0 {
 		after := content[idx+len("===PATTERNS==="):]
@@ -370,65 +348,3 @@ func parseArchResponse(content string) archData {
 	return data
 }
 
-// parseServiceDependencies extracts relationships from the SERVICE_DEPENDENCIES
-// section text. Expected format: "ServiceA -> ServiceB: protocol (reason)"
-// It fuzzy-matches service names against the parsed component list.
-func parseServiceDependencies(depsText string, components []diagrams.Component) []diagrams.Relationship {
-	if depsText == "" {
-		return nil
-	}
-
-	// Build a lookup: lowercased component name → canonical name.
-	compNames := make(map[string]string)
-	for _, c := range components {
-		compNames[strings.ToLower(c.Name)] = c.Name
-	}
-
-	// Fuzzy match a name against known components.
-	matchComponent := func(name string) string {
-		name = strings.TrimSpace(name)
-		lower := strings.ToLower(name)
-		// Exact match.
-		if canonical, ok := compNames[lower]; ok {
-			return canonical
-		}
-		// Substring containment.
-		for key, canonical := range compNames {
-			if strings.Contains(lower, key) || strings.Contains(key, lower) {
-				return canonical
-			}
-		}
-		return ""
-	}
-
-	seen := make(map[string]bool)
-	var rels []diagrams.Relationship
-	for _, line := range strings.Split(depsText, "\n") {
-		line = strings.TrimSpace(line)
-		line = strings.TrimPrefix(line, "- ")
-		line = strings.TrimPrefix(line, "* ")
-		// Look for "A -> B" pattern.
-		arrowIdx := strings.Index(line, "->")
-		if arrowIdx < 0 {
-			continue
-		}
-		from := line[:arrowIdx]
-		rest := line[arrowIdx+2:]
-		// Strip label after colon: "B: protocol (reason)" → "B"
-		if colonIdx := strings.Index(rest, ":"); colonIdx >= 0 {
-			rest = rest[:colonIdx]
-		}
-		fromComp := matchComponent(from)
-		toComp := matchComponent(rest)
-		if fromComp == "" || toComp == "" || fromComp == toComp {
-			continue
-		}
-		key := fromComp + "|" + toComp
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		rels = append(rels, diagrams.Relationship{From: fromComp, To: toComp})
-	}
-	return rels
-}

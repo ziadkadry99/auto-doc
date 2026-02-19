@@ -118,7 +118,23 @@ Provide concrete usage examples showing every major way to use this tool.
 Each example as:
 EXAMPLE: Short title
 COMMAND: The exact command or code to run
-DESCRIPTION: What happens when you run this and what to expect`, contextSection, summary.String())
+DESCRIPTION: What happens when you run this and what to expect
+
+===ARCH_DIAGRAM===
+Generate a JSON architecture diagram showing how this system is structured.
+Think like an architect drawing a system diagram on a whiteboard — show the key layers, how data enters the system, flows through processing, and where it ends up.
+
+The JSON must follow this exact schema:
+{"nodes":[{"id":"unique_id","label":"Short Name","desc":"Brief description","group":"LayerName"}],"edges":[{"from":"source_id","to":"target_id","label":"what flows between them"}]}
+
+Guidelines:
+- Use 4-8 nodes maximum. Each node should be an architectural concept (e.g. "User Interface", "Processing Pipeline"), NOT individual files or modules.
+- Group nodes into meaningful architectural layers — use whatever layer names make sense for THIS project.
+- Edges represent actual data flow or control flow. Label them with what flows between components (e.g. "source files", "API requests", "embeddings").
+- Think about what a senior engineer would draw to explain this system to a new team member.
+- Node IDs must use only alphanumerics and underscores.
+
+Output ONLY the raw JSON on a single line, no markdown formatting, no code fences.`, contextSection, summary.String())
 
 	resp, err := provider.Complete(ctx, llm.CompletionRequest{
 		Model: model,
@@ -137,8 +153,10 @@ DESCRIPTION: What happens when you run this and what to expect`, contextSection,
 	data.ProjectName = projectNameFromWd(g.OutputDir)
 	data.Analyses = analyses
 
-	// Generate architecture diagram deterministically from features.
-	data.ArchDiagram = fallbackArchitectureDiagram(data.Features, analyses)
+	// Use LLM-generated architecture diagram; fall back to a simple one if not provided.
+	if data.ArchDiagram == "" {
+		data.ArchDiagram = fallbackArchitectureDiagram(data.Features)
+	}
 
 	// Build dependency diagram from file analyses.
 	depMap := make(map[string][]string)
@@ -245,6 +263,7 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 		"===ENTRY_POINTS===",
 		"===EXIT_POINTS===",
 		"===USAGES===",
+		"===ARCH_DIAGRAM===",
 	}
 
 	// findSectionEnd returns the index of the nearest following section marker.
@@ -417,6 +436,23 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 		}
 	}
 
+	// Parse architecture diagram JSON.
+	if idx := strings.Index(content, "===ARCH_DIAGRAM==="); idx >= 0 {
+		after := content[idx+len("===ARCH_DIAGRAM==="):]
+		end := findSectionEnd(after, "===ARCH_DIAGRAM===")
+		raw := strings.TrimSpace(after[:end])
+		// Strip markdown code fences if the LLM wrapped the JSON.
+		raw = strings.TrimPrefix(raw, "```json")
+		raw = strings.TrimPrefix(raw, "```")
+		raw = strings.TrimSuffix(raw, "```")
+		raw = strings.TrimSpace(raw)
+		// Validate it's actual JSON before using it.
+		var diag diagrams.DiagramData
+		if json.Unmarshal([]byte(raw), &diag) == nil && len(diag.Nodes) > 0 {
+			data.ArchDiagram = raw
+		}
+	}
+
 	// Fallback: if no markers were found, use the whole content as overview.
 	if data.ProjectOverview == "" && len(data.Features) == 0 {
 		data.ProjectOverview = strings.TrimSpace(content)
@@ -426,7 +462,9 @@ func parseEnhancedIndexResponse(content string) EnhancedIndex {
 }
 
 
-func fallbackArchitectureDiagram(features []Feature, analyses []indexer.FileAnalysis) string {
+// fallbackArchitectureDiagram produces a minimal diagram when the LLM
+// does not return an ===ARCH_DIAGRAM=== section.
+func fallbackArchitectureDiagram(features []Feature) string {
 	if len(features) == 0 {
 		data := diagrams.DiagramData{
 			Nodes: []diagrams.DiagramNode{{ID: "App", Label: "Application"}},
@@ -435,48 +473,15 @@ func fallbackArchitectureDiagram(features []Feature, analyses []indexer.FileAnal
 		return string(b)
 	}
 
-	// Cap at 10 features.
-	feats := features
-	if len(feats) > 10 {
-		feats = feats[:10]
-	}
-
-	// Infer layers from feature names/descriptions for grouping.
-	type layerInfo struct {
-		name     string
-		keywords []string
-	}
-	layers := []layerInfo{
-		{"Interface", []string{"cli", "command", "api", "endpoint", "server", "handler", "http", "grpc", "mcp", "ui", "frontend"}},
-		{"Core", []string{"engine", "core", "index", "pipeline", "process", "analyz", "logic", "walker", "traversal"}},
-		{"Storage", []string{"store", "storage", "database", "db", "vector", "embed", "persist", "cache"}},
-		{"Output", []string{"output", "doc", "generat", "render", "template", "diagram", "site", "report", "format"}},
-	}
-
-	assigned := make(map[string]string) // feat name → layer name
-	for _, feat := range feats {
-		lower := strings.ToLower(feat.Name + " " + feat.Description)
-		for _, l := range layers {
-			for _, kw := range l.keywords {
-				if strings.Contains(lower, kw) {
-					assigned[feat.Name] = l.name
-					break
-				}
-			}
-			if assigned[feat.Name] != "" {
-				break
-			}
-		}
-		if assigned[feat.Name] == "" {
-			assigned[feat.Name] = "Core"
-		}
-	}
-
-	// Build nodes with group field.
 	sanitizeID := func(s string) string {
 		r := strings.NewReplacer("/", "_", "\\", "_", ".", "_", "-", "_", " ", "_",
 			"(", "_", ")", "_", "[", "_", "]", "_", "{", "_", "}", "_", ":", "_")
 		return r.Replace(s)
+	}
+
+	feats := features
+	if len(feats) > 8 {
+		feats = feats[:8]
 	}
 
 	var data diagrams.DiagramData
@@ -484,57 +489,8 @@ func fallbackArchitectureDiagram(features []Feature, analyses []indexer.FileAnal
 		data.Nodes = append(data.Nodes, diagrams.DiagramNode{
 			ID:    sanitizeID(feat.Name),
 			Label: feat.Name,
-			Group: assigned[feat.Name],
+			Desc:  feat.Description,
 		})
-	}
-
-	// Build cross-feature dependency edges.
-	fileToFeature := make(map[string]string, len(analyses))
-	for _, feat := range feats {
-		for _, fp := range feat.Files {
-			fileToFeature[fp] = feat.Name
-		}
-	}
-	seen := make(map[string]bool)
-	for _, a := range analyses {
-		fromFeat, ok := fileToFeature[a.FilePath]
-		if !ok {
-			continue
-		}
-		for _, d := range a.Dependencies {
-			toFeat, ok := fileToFeature[d.Name]
-			if !ok || toFeat == fromFeat {
-				continue
-			}
-			key := fromFeat + "->" + toFeat
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			data.Edges = append(data.Edges, diagrams.DiagramEdge{
-				From: sanitizeID(fromFeat),
-				To:   sanitizeID(toFeat),
-			})
-		}
-	}
-
-	// If no edges found, connect adjacent layers for minimal structure.
-	if len(data.Edges) == 0 {
-		var layerReps []string
-		for _, l := range layers {
-			for _, feat := range feats {
-				if assigned[feat.Name] == l.name {
-					layerReps = append(layerReps, feat.Name)
-					break
-				}
-			}
-		}
-		for i := 0; i < len(layerReps)-1; i++ {
-			data.Edges = append(data.Edges, diagrams.DiagramEdge{
-				From: sanitizeID(layerReps[i]),
-				To:   sanitizeID(layerReps[i+1]),
-			})
-		}
 	}
 
 	b, _ := json.Marshal(data)
