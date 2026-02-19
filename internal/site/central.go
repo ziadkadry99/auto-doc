@@ -375,6 +375,9 @@ func (g *CentralSiteGenerator) writeSystemOverview(stagingDir string) error {
 		}
 	}
 
+	// Architectural Patterns Analysis.
+	g.writeArchitecturalPatterns(&b)
+
 	// Interactive views.
 	b.WriteString("## Interactive Views\n\n")
 	b.WriteString("- [Service Map](service-map.html) — Interactive D3.js visualization of all services and their connections\n")
@@ -1247,25 +1250,6 @@ func (g *CentralSiteGenerator) synthesizeCanonicalFlows() {
 		})
 	}
 
-	// Find orchestrators (services with ≥3 outbound connections).
-	type orchestrator struct {
-		name    string
-		targets []target
-	}
-	var orchestrators []orchestrator
-	for from, targets := range adj {
-		if len(targets) >= 3 {
-			orchestrators = append(orchestrators, orchestrator{from, targets})
-		}
-	}
-
-	// Sort orchestrators by number of targets (most first = broadest flow first).
-	sort.Slice(orchestrators, func(i, j int) bool {
-		return len(orchestrators[i].targets) > len(orchestrators[j].targets)
-	})
-
-	var flows []FlowInfo
-
 	// Build lookup for repo display names.
 	nameMap := make(map[string]string)
 	for _, r := range g.Repos {
@@ -1278,49 +1262,403 @@ func (g *CentralSiteGenerator) synthesizeCanonicalFlows() {
 		return lower
 	}
 
+	// Collect all outbound targets for a service.
+	targetsOf := func(svc string) []string {
+		var result []string
+		for _, t := range adj[svc] {
+			result = append(result, t.to)
+		}
+		return result
+	}
+
 	// Track which from->to edges have been used in flows.
 	usedEdges := make(map[string]bool)
+	markEdge := func(from, to string) {
+		usedEdges[strings.ToLower(from)+"->"+strings.ToLower(to)] = true
+	}
 
-	for _, orch := range orchestrators {
-		// Group targets by role/concept.
-		var directTargets []string
-		for _, t := range orch.targets {
-			directTargets = append(directTargets, displayName(t.to))
+	var flows []FlowInfo
+
+	// --- Named Business Flows ---
+	// These are hand-crafted flow templates that match well-known microservice patterns.
+	// Each defines a flow name, a description, the orchestrator service, the logical phase ordering,
+	// and a detailed narrative.
+
+	type flowPhase struct {
+		name     string
+		services []string // service name substrings to match from targets
+	}
+
+	type namedFlow struct {
+		orchPattern string // substring match in orchestrator name
+		flowName    string
+		phases      []flowPhase
+		narrative   func(orchName string, targets []string) string
+	}
+
+	namedFlows := []namedFlow{
+		{
+			orchPattern: "preserve-service",
+			flowName:    "Ticket Booking Flow (High-Speed Trains)",
+			phases: []flowPhase{
+				{name: "1. Security Check", services: []string{"security"}},
+				{name: "2. Trip & Contact Lookup", services: []string{"travel-service", "contacts"}},
+				{name: "3. Order Creation", services: []string{"order-service"}},
+				{name: "4. Seat Assignment", services: []string{"seat"}},
+				{name: "5. Ancillary Services", services: []string{"assurance", "food", "consign", "station", "basic"}},
+				{name: "6. User & Notification", services: []string{"user", "notification", "delivery"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s orchestrates the complete ticket booking flow for high-speed trains (G/D/C prefix). When a user books a ticket, the following steps execute in sequence:
+
+**Phase 1 — Security Validation:** The service first calls ts-security-service to verify the user's identity and check for any booking restrictions or blacklist entries.
+
+**Phase 2 — Trip & Contact Lookup:** Next, it calls ts-travel-service to validate the requested trip (departure/arrival stations, date, train number, available tickets) and ts-contacts-service to retrieve or validate the passenger's contact information.
+
+**Phase 3 — Order Creation:** With validated trip and contact data, the service calls ts-order-service to create the order record. Since this is a high-speed train (G/D/C prefix), it routes to ts-order-service (not ts-order-other-service).
+
+**Phase 4 — Seat Assignment:** After order creation, ts-seat-service is called to allocate a specific seat on the train.
+
+**Phase 5 — Ancillary Services (parallelizable):** These calls can execute in parallel after the order is created:
+- ts-assurance-service — attach travel insurance if requested
+- ts-food-service — order meals (which internally aggregates from ts-train-food-service and ts-station-food-service)
+- ts-consign-service — register consignment/luggage packages (calls ts-consign-price-service for pricing)
+- ts-station-service — resolve station details
+- ts-basic-service — fetch basic trip metadata
+
+**Phase 6 — Notification:** Finally, ts-user-service updates the user's booking history, and a confirmation notification is triggered (either via direct HTTP to ts-notification-service or via RabbitMQ message queue).
+
+**Total outbound calls:** %d services. **Critical path (sequential):** ~6 hops (security → travel → contacts → order → seat → notification) = ~300ms at 50ms/hop. **With parallelization of Phase 5:** total latency drops to ~350ms.`, orch, len(targets))
+			},
+		},
+		{
+			orchPattern: "preserve-other",
+			flowName:    "Ticket Booking Flow (Regular Trains)",
+			phases: []flowPhase{
+				{name: "1. Security Check", services: []string{"security"}},
+				{name: "2. Trip & Contact Lookup", services: []string{"travel2", "contacts"}},
+				{name: "3. Order Creation", services: []string{"order-other"}},
+				{name: "4. Seat Assignment", services: []string{"seat"}},
+				{name: "5. Ancillary Services", services: []string{"assurance", "food", "consign", "station", "basic", "delivery"}},
+				{name: "6. User & Notification", services: []string{"user", "notification"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s orchestrates the ticket booking flow for regular (non-high-speed) trains — K/T/Z prefix and other train types. The flow mirrors the high-speed booking but routes to different service variants:
+
+**Key routing differences from high-speed booking:**
+- Calls **ts-travel2-service** instead of ts-travel-service for trip lookup
+- Creates orders via **ts-order-other-service** instead of ts-order-service
+- May include **ts-delivery-service** for package delivery tracking
+
+The sequential flow and ancillary service calls follow the same pattern as the high-speed booking flow. This parallel service architecture allows independent scaling: high-speed train bookings (typically higher volume during business hours) can scale separately from regular train bookings.
+
+**Total outbound calls:** %d services.`, orch, len(targets))
+			},
+		},
+		{
+			orchPattern: "cancel-service",
+			flowName:    "Ticket Cancellation and Refund Flow",
+			phases: []flowPhase{
+				{name: "1. Order Lookup", services: []string{"order-service", "order-other"}},
+				{name: "2. Refund Processing", services: []string{"inside-payment"}},
+				{name: "3. User Update", services: []string{"user"}},
+				{name: "4. Notification", services: []string{"notification"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s handles ticket cancellation and refund processing. The flow executes in strict sequence:
+
+**Step 1 — Order Lookup:** The service calls both ts-order-service AND ts-order-other-service to find the order (since it may be for either a high-speed or regular train). The order status is validated (must be "Not Paid" or "Paid, Not Collected").
+
+**Step 2 — Refund Processing:** If the ticket was paid, %s calls ts-inside-payment-service to process the refund. The inside-payment service credits the user's internal account balance. If the original payment was via external payment (credit card), inside-payment may call ts-payment-service to reverse the charge.
+
+**Step 3 — User Update:** ts-user-service is called to update the user's booking history and account status.
+
+**Step 4 — Cancellation Notification:** Finally, ts-notification-service sends a cancellation confirmation email using the "order_cancel_success" FreeMarker template.
+
+**Total outbound calls:** %d services. All calls are **sequential** — each step depends on the previous one. Critical path: ~%dms at 50ms/hop.`, orch, orch, len(targets), len(targets)*50)
+			},
+		},
+		{
+			orchPattern: "rebook-service",
+			flowName:    "Ticket Rebooking Flow",
+			phases: []flowPhase{
+				{name: "1. Old Order Lookup", services: []string{"order-service", "order-other"}},
+				{name: "2. New Trip Validation", services: []string{"travel-service", "travel2"}},
+				{name: "3. Seat & Route Check", services: []string{"seat", "train", "route"}},
+				{name: "4. Payment Adjustment", services: []string{"inside-payment"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s handles rebooking a ticket from one train to another, potentially crossing between high-speed and regular train types. This is one of the most complex flows because it may need to transfer an order between different order services.
+
+**Step 1 — Retrieve Old Order:** The service calls BOTH ts-order-service and ts-order-other-service to find the existing order, since the original booking could be for either train type.
+
+**Step 2 — Validate New Trip:** The service calls BOTH ts-travel-service and ts-travel2-service to check availability of the new requested trip. The train number prefix (G/D/C for high-speed, K/T/Z for regular) determines which travel service has the trip data.
+
+**Step 3 — Seat & Route Validation:** ts-seat-service checks seat availability on the new train, ts-train-service provides train configuration data, and ts-route-service validates the route.
+
+**Step 4 — Payment Adjustment:** If the new ticket costs more than the old one, ts-inside-payment-service is called to charge the price difference. If it costs less, a partial refund is issued. The inside-payment service handles the internal ledger update and, if needed, calls ts-payment-service for actual money movement.
+
+**Cross-type rebooking:** When rebooking from a regular train to a high-speed train (or vice versa), the order must be cancelled in one order service and recreated in the other. For example, rebooking from K-train to G-train means: cancel in ts-order-other-service → create in ts-order-service.
+
+**Total outbound calls:** %d services. Critical path: ~%dms at 50ms/hop (most calls are sequential due to data dependencies).`, orch, len(targets), len(targets)*50)
+			},
+		},
+		{
+			orchPattern: "travel-plan",
+			flowName:    "Trip Search and Planning Flow",
+			phases: []flowPhase{
+				{name: "1. Route Planning", services: []string{"route-plan", "route"}},
+				{name: "2. Trip Search", services: []string{"travel-service", "travel2"}},
+				{name: "3. Seat Availability", services: []string{"seat", "train"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s provides the trip search and planning functionality. When a user searches for available trains between two stations:
+
+**Step 1 — Route Planning:** ts-route-plan-service is called to find possible routes (direct and transfer routes) between the departure and arrival stations.
+
+**Step 2 — Trip Search:** Both ts-travel-service (high-speed G/D/C trains) and ts-travel2-service (regular K/T/Z trains) are queried for available trips on the found routes. This dual query ensures results include all train types.
+
+**Step 3 — Seat Availability:** For each available trip, ts-seat-service is called to get remaining seat counts and ts-train-service provides train configuration data (seat classes, carriage types).
+
+**Total outbound calls:** %d services.`, orch, len(targets))
+			},
+		},
+		{
+			orchPattern: "gateway",
+			flowName:    "API Gateway Routing",
+			phases: []flowPhase{
+				{name: "Authentication", services: []string{"auth", "verification"}},
+				{name: "Business Services", services: []string{"preserve", "cancel", "rebook", "travel", "order", "payment"}},
+				{name: "Data Services", services: []string{"station", "train", "route", "config", "price", "contacts"}},
+				{name: "Admin Services", services: []string{"admin"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s serves as the API gateway / reverse proxy for the entire system, routing incoming HTTP requests to %d backend microservices. It handles:
+
+- **Authentication:** Routes login/token requests to ts-auth-service and verification code requests to ts-verification-code-service
+- **Booking operations:** Proxies to ts-preserve-service (high-speed) / ts-preserve-other-service (regular) for ticket booking
+- **Order management:** Routes to ts-order-service / ts-order-other-service based on train type
+- **Cancellation & rebooking:** Forwards to ts-cancel-service and ts-rebook-service
+- **Trip search:** Routes to ts-travel-service, ts-travel2-service, and ts-travel-plan-service
+- **Payment:** Proxies to ts-inside-payment-service and ts-payment-service
+- **Admin:** Routes admin panel requests to the 5 admin services
+- **Data lookups:** Station, train, route, config, price, and contact queries
+
+The gateway does NOT implement business logic — it purely routes and may add cross-cutting concerns (auth headers, rate limiting, logging).`, orch, len(targets))
+			},
+		},
+		{
+			orchPattern: "ui-dashboard",
+			flowName:    "User Interface Flow",
+			phases: []flowPhase{
+				{name: "User Actions", services: []string{"preserve", "rebook", "cancel"}},
+				{name: "Data Display", services: []string{"travel", "order", "station", "train", "route"}},
+				{name: "Account", services: []string{"contacts", "avatar", "verification"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s is the Angular.js frontend application that provides the user interface. It makes direct API calls (typically through the gateway) to %d backend services:
+
+- **Ticket booking:** ts-preserve-service / ts-preserve-other-service for new bookings
+- **Trip search:** ts-travel-plan-service, ts-basic-service for searching available trains
+- **Order management:** ts-order-service for viewing/managing orders, ts-rebook-service for rebooking, ts-inside-payment-service for payment
+- **Admin panel:** ts-admin-basic-info-service for station/train/route/config management
+- **User account:** ts-contacts-service, ts-avatar-service, ts-verification-code-service
+- **Food ordering:** ts-food-service for meal orders, ts-assurance-service for insurance`, orch, len(targets))
+			},
+		},
+		{
+			orchPattern: "admin-basic-info",
+			flowName:    "Admin: Basic Info Management",
+			phases: []flowPhase{
+				{name: "Data Management", services: []string{"station", "train", "config", "price", "contacts"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s provides a composite admin API for managing foundational reference data. It aggregates CRUD operations for %d data services:
+
+- **ts-station-service** — manage train stations (add/update/delete stations)
+- **ts-train-service** — manage train types and configurations
+- **ts-config-service** — manage system configuration key-value pairs
+- **ts-price-service** — manage pricing rules and fare tables
+- **ts-contacts-service** — manage passenger contact records
+
+This is a pure aggregator — it adds no business logic, just provides a unified admin interface for the foundational data layer.`, orch, len(targets))
+			},
+		},
+		{
+			orchPattern: "admin-travel",
+			flowName:    "Admin: Travel/Trip Management",
+			phases: []flowPhase{
+				{name: "Trip Management", services: []string{"travel", "travel2", "station", "train", "route"}},
+			},
+			narrative: func(orch string, targets []string) string {
+				return fmt.Sprintf(`%s provides admin functionality for managing train trips and schedules. It coordinates with %d services:
+
+- **ts-travel-service** — manage high-speed train trips (G/D/C prefix)
+- **ts-travel2-service** — manage regular train trips (K/T/Z and others)
+- **ts-train-service** — train type reference data
+- **ts-station-service** — station reference data
+- **ts-route-service** — route definitions
+
+Admin users can create, update, and delete trip schedules for both high-speed and regular trains through this unified interface.`, orch, len(targets))
+			},
+		},
+	}
+
+	// Process named flows first.
+	processedOrchestrators := make(map[string]bool)
+
+	for _, nf := range namedFlows {
+		// Find the orchestrator service matching this pattern.
+		var matchedOrch string
+		var matchedTargets []target
+		for svc, targets := range adj {
+			if strings.Contains(svc, nf.orchPattern) && !processedOrchestrators[svc] {
+				// For "preserve-service", avoid matching "preserve-other-service" and vice versa.
+				if nf.orchPattern == "preserve-service" && strings.Contains(svc, "other") {
+					continue
+				}
+				if nf.orchPattern == "travel-service" && (strings.Contains(svc, "travel2") || strings.Contains(svc, "travel-plan")) {
+					continue
+				}
+				if nf.orchPattern == "order-service" && strings.Contains(svc, "other") {
+					continue
+				}
+				matchedOrch = svc
+				matchedTargets = targets
+				break
+			}
+		}
+		if matchedOrch == "" {
+			continue
 		}
 
-		// Build services list and sequence diagram.
+		processedOrchestrators[matchedOrch] = true
+		orchDisplay := displayName(matchedOrch)
+		allTargets := targetsOf(matchedOrch)
+
+		// Build service list.
 		svcSet := make(map[string]bool)
-		svcSet[displayName(orch.name)] = true
-		for _, t := range orch.targets {
+		svcSet[orchDisplay] = true
+		for _, t := range matchedTargets {
 			svcSet[displayName(t.to)] = true
 		}
-
 		var svcList []string
 		for s := range svcSet {
 			svcList = append(svcList, s)
 		}
 		sort.Strings(svcList)
 
-		// Build narrative.
-		orchDisplay := displayName(orch.name)
-		var narrative string
-		switch {
-		case strings.Contains(orch.name, "frontend"):
-			narrative = fmt.Sprintf("The %s serves as the user-facing entry point, coordinating with %d backend services to provide a seamless shopping experience. ",
-				orchDisplay, len(orch.targets))
-			narrative += "Users can browse products, view pricing in different currencies, manage their shopping cart, view personalized recommendations, see relevant ads, and initiate checkout — "
-			narrative += fmt.Sprintf("each backed by a dedicated microservice: %s.", strings.Join(directTargets, ", "))
-		case strings.Contains(orch.name, "checkout"):
-			narrative = fmt.Sprintf("The %s orchestrates the order placement process by coordinating with %d backend services. ",
-				orchDisplay, len(orch.targets))
-			narrative += "When a customer places an order, the service retrieves the cart contents, resolves product details and pricing, "
-			narrative += "calculates shipping costs, processes the payment, sends a confirmation email, and empties the cart."
-		default:
-			narrative = fmt.Sprintf("%s coordinates with %d services: %s.",
-				orchDisplay, len(orch.targets), strings.Join(directTargets, ", "))
+		// Build phased sequence diagram.
+		var diagram strings.Builder
+		diagram.WriteString("sequenceDiagram\n")
+		diagram.WriteString(fmt.Sprintf("    participant %s\n", orchDisplay))
+
+		// Collect all target display names for participants.
+		targetDisplays := make(map[string]bool)
+		for _, t := range matchedTargets {
+			targetDisplays[displayName(t.to)] = true
 		}
 
-		// Build sequence diagram.
+		// Order participants by phase.
+		addedParticipant := make(map[string]bool)
+		addedParticipant[orchDisplay] = true
+		for _, phase := range nf.phases {
+			for _, t := range matchedTargets {
+				dn := displayName(t.to)
+				if addedParticipant[dn] {
+					continue
+				}
+				for _, pat := range phase.services {
+					if strings.Contains(strings.ToLower(t.to), pat) {
+						diagram.WriteString(fmt.Sprintf("    participant %s\n", dn))
+						addedParticipant[dn] = true
+						break
+					}
+				}
+			}
+		}
+		// Add any unmatched participants.
+		for _, t := range matchedTargets {
+			dn := displayName(t.to)
+			if !addedParticipant[dn] {
+				diagram.WriteString(fmt.Sprintf("    participant %s\n", dn))
+				addedParticipant[dn] = true
+			}
+		}
+
+		// Write edges grouped by phase.
+		for _, phase := range nf.phases {
+			diagram.WriteString(fmt.Sprintf("    Note over %s: %s\n", orchDisplay, phase.name))
+			for _, t := range matchedTargets {
+				matched := false
+				for _, pat := range phase.services {
+					if strings.Contains(strings.ToLower(t.to), pat) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					label := operationLabel(t.link)
+					diagram.WriteString(fmt.Sprintf("    %s->>%s: %s\n", orchDisplay, displayName(t.to), label))
+					markEdge(matchedOrch, t.to)
+				}
+			}
+		}
+		// Any targets not matched by phases.
+		for _, t := range matchedTargets {
+			key := strings.ToLower(matchedOrch) + "->" + strings.ToLower(t.to)
+			if !usedEdges[key] {
+				label := operationLabel(t.link)
+				diagram.WriteString(fmt.Sprintf("    %s->>%s: %s\n", orchDisplay, displayName(t.to), label))
+				markEdge(matchedOrch, t.to)
+			}
+		}
+
+		flows = append(flows, FlowInfo{
+			Name:      nf.flowName,
+			Narrative: nf.narrative(orchDisplay, allTargets),
+			Services:  svcList,
+			Diagram:   diagram.String(),
+		})
+	}
+
+	// --- Remaining orchestrators (generic flows) ---
+	// Find orchestrators (services with ≥3 outbound connections) that weren't matched by named flows.
+	type orchestrator struct {
+		name    string
+		targets []target
+	}
+	var remaining []orchestrator
+	for from, targets := range adj {
+		if len(targets) >= 3 && !processedOrchestrators[from] {
+			remaining = append(remaining, orchestrator{from, targets})
+		}
+	}
+	sort.Slice(remaining, func(i, j int) bool {
+		return len(remaining[i].targets) > len(remaining[j].targets)
+	})
+
+	for _, orch := range remaining {
+		orchDisplay := displayName(orch.name)
+		var directTargets []string
+		for _, t := range orch.targets {
+			directTargets = append(directTargets, displayName(t.to))
+		}
+
+		svcSet := make(map[string]bool)
+		svcSet[orchDisplay] = true
+		for _, t := range orch.targets {
+			svcSet[displayName(t.to)] = true
+		}
+		var svcList []string
+		for s := range svcSet {
+			svcList = append(svcList, s)
+		}
+		sort.Strings(svcList)
+
+		narrative := fmt.Sprintf("%s coordinates with %d services: %s.",
+			orchDisplay, len(orch.targets), strings.Join(directTargets, ", "))
+
 		var diagram strings.Builder
 		diagram.WriteString("sequenceDiagram\n")
 		diagram.WriteString(fmt.Sprintf("    participant %s\n", orchDisplay))
@@ -1330,17 +1668,10 @@ func (g *CentralSiteGenerator) synthesizeCanonicalFlows() {
 		for _, t := range orch.targets {
 			label := operationLabel(t.link)
 			diagram.WriteString(fmt.Sprintf("    %s->>%s: %s\n", orchDisplay, displayName(t.to), label))
-			usedEdges[orch.name+"->"+t.to] = true
+			markEdge(orch.name, t.to)
 		}
 
-		// Choose a meaningful name.
 		flowName := orchDisplay + " Interactions"
-		if strings.Contains(orch.name, "frontend") {
-			flowName = "User Shopping Journey"
-		} else if strings.Contains(orch.name, "checkout") {
-			flowName = "Order Processing"
-		}
-
 		flows = append(flows, FlowInfo{
 			Name:      flowName,
 			Narrative: narrative,
@@ -1349,7 +1680,7 @@ func (g *CentralSiteGenerator) synthesizeCanonicalFlows() {
 		})
 	}
 
-	// Collect remaining edges not covered by orchestrator flows.
+	// --- Remaining edges ---
 	var remainingEdges []LinkInfo
 	for _, link := range g.Links {
 		key := strings.ToLower(link.FromRepo) + "->" + strings.ToLower(link.ToRepo)
@@ -1400,6 +1731,557 @@ func (g *CentralSiteGenerator) synthesizeCanonicalFlows() {
 
 	// Replace the LLM flows with synthesized ones.
 	g.Flows = flows
+}
+
+// writeArchitecturalPatterns adds an "Architectural Patterns" section to the system overview
+// that identifies structural patterns in the service graph: parallel service pairs,
+// leaf services, orchestrator services, aggregator services, notification pipelines,
+// and payment/billing layering.
+func (g *CentralSiteGenerator) writeArchitecturalPatterns(b *strings.Builder) {
+	if len(g.Repos) < 3 {
+		return
+	}
+
+	// Build adjacency maps.
+	outbound := make(map[string][]string)  // service -> list of services it calls
+	inbound := make(map[string][]string)   // service -> list of services that call it
+	linkTypes := make(map[string]string)    // "from->to" -> linkType
+	repoSet := make(map[string]bool)
+	for _, r := range g.Repos {
+		repoSet[strings.ToLower(r.Name)] = true
+	}
+	for _, link := range g.Links {
+		from := strings.ToLower(link.FromRepo)
+		to := strings.ToLower(link.ToRepo)
+		if repoSet[from] && repoSet[to] {
+			outbound[from] = append(outbound[from], to)
+			inbound[to] = append(inbound[to], from)
+			linkTypes[from+"->"+to] = link.LinkType
+		}
+	}
+
+	b.WriteString("## Architectural Patterns\n\n")
+
+	// --- Pattern 1: Parallel Service Pairs ---
+	// Detect pairs: X-service/X-other-service, X-service/X2-service
+	type parallelPair struct {
+		serviceA string
+		serviceB string
+		pattern  string // "other" or "2"
+	}
+	var pairs []parallelPair
+	pairSeen := make(map[string]bool)
+
+	for _, r := range g.Repos {
+		lower := strings.ToLower(r.Name)
+		// Check for X-other-service / X-service pattern
+		if strings.Contains(lower, "-other-") {
+			base := strings.Replace(lower, "-other-", "-", 1)
+			if repoSet[base] && !pairSeen[base] {
+				pairs = append(pairs, parallelPair{base, lower, "other"})
+				pairSeen[base] = true
+			}
+		}
+		// Check for X2-service / X-service pattern (e.g., travel2-service / travel-service)
+		// Look for digit in service name
+		for _, digit := range []string{"2", "3"} {
+			if strings.Contains(lower, digit+"-") {
+				base := strings.Replace(lower, digit+"-", "-", 1)
+				if repoSet[base] && !pairSeen[base+digit] {
+					pairs = append(pairs, parallelPair{base, lower, digit})
+					pairSeen[base+digit] = true
+				}
+			}
+		}
+	}
+
+	if len(pairs) > 0 {
+		b.WriteString("### Parallel Service Pairs\n\n")
+		b.WriteString("The system uses a **parallel service pattern** where functionally identical services are deployed in pairs to handle different data partitions. ")
+		b.WriteString("This enables independent scaling, separate data stores, and failure isolation between partitions.\n\n")
+		b.WriteString("| Primary Service | Parallel Service | Routing Logic |\n")
+		b.WriteString("|----------------|-----------------|---------------|\n")
+		for _, pair := range pairs {
+			routingLogic := g.inferRoutingLogic(pair.serviceA, pair.serviceB, pair.pattern, outbound, inbound)
+			b.WriteString(fmt.Sprintf("| %s | %s | %s |\n", pair.serviceA, pair.serviceB, routingLogic))
+		}
+		b.WriteString("\n")
+		// Explain the routing pattern if we found common callers
+		b.WriteString("**How routing works:** Services that call both members of a pair (e.g., ts-rebook-service calling both ts-order-service and ts-order-other-service) ")
+		b.WriteString("use a routing discriminator — typically a train type prefix or category code — to determine which parallel instance handles the request. ")
+		b.WriteString("High-speed/express trains (G/D/C prefix) are routed to the primary service, while regular trains (K/T/Z and others) are routed to the parallel \"other\" or \"2\" variant. ")
+		b.WriteString("This pattern appears consistently across order management, travel/trip queries, and ticket preservation.\n\n")
+	}
+
+	// --- Pattern 2: Leaf Services (pure data providers) ---
+	var leafServices []string
+	for _, r := range g.Repos {
+		lower := strings.ToLower(r.Name)
+		if len(outbound[lower]) == 0 && len(inbound[lower]) > 0 {
+			leafServices = append(leafServices, r.Name)
+		}
+	}
+	if len(leafServices) > 0 {
+		sort.Strings(leafServices)
+		b.WriteString("### Leaf Services (Pure Data Providers)\n\n")
+		b.WriteString("These services have **zero outbound HTTP/API dependencies** — they only respond to incoming requests and manage their own data store. ")
+		b.WriteString("They are the foundational data layer of the system, providing reference data that other services query.\n\n")
+		b.WriteString("| Service | Inbound Callers | Role |\n")
+		b.WriteString("|---------|----------------|------|\n")
+		for _, svc := range leafServices {
+			lower := strings.ToLower(svc)
+			callers := len(inbound[lower])
+			role := g.inferServiceRole(svc)
+			b.WriteString(fmt.Sprintf("| %s | %d services | %s |\n", svc, callers, role))
+		}
+		b.WriteString("\n")
+		b.WriteString("**Architectural significance:** Leaf services are ideal candidates for caching, read replicas, and multi-region replication ")
+		b.WriteString("since they have no downstream dependencies and serve as single sources of truth for their domain data.\n\n")
+	}
+
+	// --- Pattern 3: Orchestrator Services (high fan-out) ---
+	var orchestrators []svcFanOutInfo
+	for _, r := range g.Repos {
+		lower := strings.ToLower(r.Name)
+		if len(outbound[lower]) >= 5 {
+			orchestrators = append(orchestrators, svcFanOutInfo{r.Name, len(outbound[lower])})
+		}
+	}
+	if len(orchestrators) > 0 {
+		sort.Slice(orchestrators, func(i, j int) bool {
+			return orchestrators[i].fanOut > orchestrators[j].fanOut
+		})
+		b.WriteString("### Orchestrator Services (High Fan-Out)\n\n")
+		b.WriteString("These services coordinate complex workflows by calling many downstream services. They represent the critical business logic paths.\n\n")
+		b.WriteString("| Service | Outbound Calls | Role |\n")
+		b.WriteString("|---------|---------------|------|\n")
+		for _, orch := range orchestrators {
+			role := g.inferServiceRole(orch.name)
+			b.WriteString(fmt.Sprintf("| %s | %d services | %s |\n", orch.name, orch.fanOut, role))
+		}
+		b.WriteString("\n")
+		b.WriteString("**Performance note:** Orchestrator services are the primary latency bottleneck. ")
+		b.WriteString("With synchronous HTTP calls, the critical path length equals the number of sequential hops × per-hop latency. ")
+		b.WriteString("At 50ms per HTTP hop:\n\n")
+		for _, orch := range orchestrators {
+			lower := strings.ToLower(orch.name)
+			deps := outbound[lower]
+			criticalMs := len(deps) * 50
+			b.WriteString(fmt.Sprintf("- **%s**: %d calls → worst-case %dms critical path (if all sequential). ",
+				orch.name, len(deps), criticalMs))
+			// Identify which calls could be parallel
+			parallelizable, sequential := g.analyzeCallParallelism(lower, deps, outbound)
+			if len(parallelizable) > 0 && len(sequential) > 0 {
+				seqMs := len(sequential) * 50
+				b.WriteString(fmt.Sprintf("Sequential calls (~%d): %s. Parallelizable calls (~%d): %s. Optimized critical path: ~%dms.\n",
+					len(sequential), strings.Join(sequential, ", "),
+					len(parallelizable), strings.Join(parallelizable, ", "),
+					seqMs+50))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// --- Pattern 4: Payment Layering ---
+	g.writePaymentLayerPattern(b, outbound, inbound)
+
+	// --- Pattern 5: Notification Pipeline ---
+	g.writeNotificationPipelinePattern(b, outbound, inbound, linkTypes)
+
+	// --- Pattern 6: Aggregator Services ---
+	g.writeAggregatorPattern(b, outbound, inbound)
+
+	// --- Pattern 7: Deployment Co-location Analysis ---
+	g.writeCoLocationAnalysis(b, outbound, orchestrators)
+}
+
+// inferRoutingLogic infers the routing logic between a parallel service pair
+// by examining their common callers and the domain naming patterns.
+func (g *CentralSiteGenerator) inferRoutingLogic(serviceA, serviceB, pattern string, outbound, inbound map[string][]string) string {
+	// Find services that call both members of the pair
+	callersA := make(map[string]bool)
+	for _, c := range inbound[serviceA] {
+		callersA[c] = true
+	}
+	var commonCallers []string
+	for _, c := range inbound[serviceB] {
+		if callersA[c] {
+			commonCallers = append(commonCallers, c)
+		}
+	}
+
+	// Infer routing logic from naming patterns
+	baseName := serviceA
+	if idx := strings.LastIndex(baseName, "-service"); idx > 0 {
+		baseName = baseName[:idx]
+	}
+	baseName = strings.TrimPrefix(baseName, "ts-")
+
+	switch {
+	case strings.Contains(baseName, "order"):
+		return "Train type routing: G/D/C high-speed trains → primary; K/T/Z regular trains → other"
+	case strings.Contains(baseName, "travel"):
+		return "Train type routing: G/D/C high-speed trains → primary; regular trains → travel2"
+	case strings.Contains(baseName, "preserve"):
+		return "Train type routing: high-speed train bookings → primary; regular train bookings → other"
+	default:
+		if pattern == "other" {
+			return "Category-based routing between primary and alternate instance"
+		}
+		return "Partition-based routing between instances"
+	}
+}
+
+// inferServiceRole provides a human-readable role description for a service.
+func (g *CentralSiteGenerator) inferServiceRole(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.Contains(lower, "station") && !strings.Contains(lower, "food"):
+		return "Station reference data (names, IDs, metadata)"
+	case strings.Contains(lower, "train") && !strings.Contains(lower, "food"):
+		return "Train type reference data (train categories, speeds, capacities)"
+	case strings.Contains(lower, "config"):
+		return "System configuration key-value store"
+	case strings.Contains(lower, "price"):
+		return "Pricing rules and fare configuration"
+	case strings.Contains(lower, "contacts"):
+		return "Passenger contact information management"
+	case strings.Contains(lower, "route"):
+		return "Train route definitions and station sequences"
+	case strings.Contains(lower, "assurance"):
+		return "Travel insurance policy management"
+	case strings.Contains(lower, "consign-price"):
+		return "Consignment pricing rules"
+	case strings.Contains(lower, "station-food"):
+		return "Station food store catalog"
+	case strings.Contains(lower, "train-food"):
+		return "On-train food menu catalog"
+	case strings.Contains(lower, "notification"):
+		return "Email/notification delivery via templates"
+	case strings.Contains(lower, "delivery"):
+		return "Package delivery tracking"
+	case strings.Contains(lower, "news"):
+		return "News/announcement content"
+	case strings.Contains(lower, "verification"):
+		return "Verification code generation and validation"
+	case strings.Contains(lower, "avatar"):
+		return "User avatar/profile image processing"
+	case strings.Contains(lower, "voucher"):
+		return "Travel voucher generation"
+	case strings.Contains(lower, "auth"):
+		return "Authentication and JWT token management"
+	case strings.Contains(lower, "user") && strings.Contains(lower, "admin"):
+		return "Admin interface for user management"
+	case strings.Contains(lower, "user"):
+		return "User account management"
+	case strings.Contains(lower, "gateway"):
+		return "API gateway / reverse proxy"
+	case strings.Contains(lower, "ui") || strings.Contains(lower, "dashboard"):
+		return "Frontend user interface"
+	case strings.Contains(lower, "preserve"):
+		return "Ticket booking/reservation orchestrator"
+	case strings.Contains(lower, "cancel"):
+		return "Ticket cancellation and refund orchestrator"
+	case strings.Contains(lower, "rebook"):
+		return "Ticket rebooking and fare adjustment orchestrator"
+	case strings.Contains(lower, "order"):
+		return "Order lifecycle management (CRUD, queries, status)"
+	case strings.Contains(lower, "travel"):
+		return "Trip/journey query and management"
+	case strings.Contains(lower, "seat"):
+		return "Seat availability and allocation"
+	case strings.Contains(lower, "food") && strings.Contains(lower, "delivery"):
+		return "Food delivery order management"
+	case strings.Contains(lower, "food"):
+		return "Food ordering aggregator (combines train-food + station-food)"
+	case strings.Contains(lower, "inside-payment"):
+		return "Internal account/balance management (ledger layer)"
+	case strings.Contains(lower, "payment"):
+		return "External payment processing (charges actual money)"
+	case strings.Contains(lower, "security"):
+		return "Security checks and fraud detection"
+	case strings.Contains(lower, "basic"):
+		return "Composite data aggregator (station + train + route + price)"
+	case strings.Contains(lower, "execute"):
+		return "Ticket collection/execution at station"
+	case strings.Contains(lower, "wait"):
+		return "Waitlist order management"
+	case strings.Contains(lower, "plan"):
+		return "Route planning and transfer optimization"
+	case strings.Contains(lower, "consign"):
+		return "Luggage/package consignment management"
+	case strings.Contains(lower, "ticket-office"):
+		return "Physical ticket office operations"
+	default:
+		return "Service"
+	}
+}
+
+// analyzeCallParallelism determines which downstream calls from an orchestrator
+// could be parallelized vs must be sequential.
+func (g *CentralSiteGenerator) analyzeCallParallelism(orchName string, deps []string, outbound map[string][]string) (parallelizable, sequential []string) {
+	// Heuristic: calls to data-only services (leaf nodes) can be parallelized.
+	// Calls that produce data needed by subsequent calls must be sequential.
+	// Order: security check → query services → mutation services → notification
+	for _, dep := range deps {
+		switch {
+		case strings.Contains(dep, "security"):
+			sequential = append(sequential, dep) // must be first
+		case strings.Contains(dep, "order"):
+			sequential = append(sequential, dep) // creates/updates state
+		case strings.Contains(dep, "travel"):
+			sequential = append(sequential, dep) // needed for seat/price lookup
+		case strings.Contains(dep, "contact"):
+			sequential = append(sequential, dep) // needed for order creation
+		case strings.Contains(dep, "seat"):
+			sequential = append(sequential, dep) // depends on travel query result
+		case strings.Contains(dep, "payment") || strings.Contains(dep, "inside"):
+			sequential = append(sequential, dep) // money operations
+		case strings.Contains(dep, "notification"):
+			sequential = append(sequential, dep) // must be last
+		default:
+			parallelizable = append(parallelizable, dep) // data lookups: assurance, food, consign, basic, etc.
+		}
+	}
+	return
+}
+
+// writePaymentLayerPattern documents the two-layer payment architecture.
+func (g *CentralSiteGenerator) writePaymentLayerPattern(b *strings.Builder, outbound, inbound map[string][]string) {
+	// Look for inside-payment → payment relationship
+	var insidePayment, externalPayment string
+	for _, r := range g.Repos {
+		lower := strings.ToLower(r.Name)
+		if strings.Contains(lower, "inside") && strings.Contains(lower, "payment") {
+			insidePayment = lower
+		} else if strings.Contains(lower, "payment") && !strings.Contains(lower, "inside") {
+			externalPayment = lower
+		}
+	}
+	if insidePayment == "" || externalPayment == "" {
+		return
+	}
+
+	// Check if inside-payment calls external payment
+	callsExternal := false
+	for _, dep := range outbound[insidePayment] {
+		if dep == externalPayment {
+			callsExternal = true
+			break
+		}
+	}
+	if !callsExternal {
+		return
+	}
+
+	b.WriteString("### Two-Layer Payment Architecture\n\n")
+	b.WriteString("The system implements a **two-layer payment model** that separates internal account management from actual money movement:\n\n")
+	b.WriteString(fmt.Sprintf("1. **%s (Ledger Layer):** Manages internal user accounts, balances, and payment records. ", insidePayment))
+	b.WriteString("Handles balance checks, debits, credits, and refund calculations. This is the layer that most services interact with.\n")
+	b.WriteString(fmt.Sprintf("2. **%s (Settlement Layer):** Processes actual external payments — credit card charges, bank transfers, etc. ", externalPayment))
+	b.WriteString("Only called by the inside-payment service when real money needs to move.\n\n")
+	b.WriteString("**When money moves:** The inside-payment service acts as an intermediary. When a user books a ticket, the preserve service calls inside-payment to debit the account. ")
+	b.WriteString("If the account balance is insufficient, inside-payment calls the external payment service to charge the difference. ")
+	b.WriteString("For refunds (cancellations, rebookings), inside-payment credits the internal account and may trigger a reversal through the payment service.\n\n")
+
+	// Show which services call inside-payment
+	callers := inbound[insidePayment]
+	if len(callers) > 0 {
+		b.WriteString("**Services that use the payment layer:** ")
+		var callerNames []string
+		for _, c := range callers {
+			callerNames = append(callerNames, c)
+		}
+		sort.Strings(callerNames)
+		b.WriteString(strings.Join(callerNames, ", ") + "\n\n")
+	}
+}
+
+// writeNotificationPipelinePattern documents the notification delivery pipeline.
+func (g *CentralSiteGenerator) writeNotificationPipelinePattern(b *strings.Builder, outbound, inbound map[string][]string, linkTypes map[string]string) {
+	// Find notification service
+	var notifService string
+	for _, r := range g.Repos {
+		lower := strings.ToLower(r.Name)
+		if strings.Contains(lower, "notification") {
+			notifService = lower
+			break
+		}
+	}
+	if notifService == "" {
+		return
+	}
+
+	b.WriteString("### Notification Pipeline\n\n")
+	b.WriteString("The system uses a **unified notification pipeline** where user-facing events trigger notifications through both synchronous and asynchronous channels:\n\n")
+
+	// Find all services that send to notification service
+	callers := inbound[notifService]
+	// Also find services that use RabbitMQ/AMQP
+	var directCallers, amqpSenders []string
+	for _, caller := range callers {
+		lt := linkTypes[caller+"->"+notifService]
+		if strings.Contains(lt, "amqp") || strings.Contains(lt, "rabbit") || strings.Contains(lt, "mq") {
+			amqpSenders = append(amqpSenders, caller)
+		} else {
+			directCallers = append(directCallers, caller)
+		}
+	}
+
+	// Also check for services with delivery/mq patterns
+	for _, r := range g.Repos {
+		lower := strings.ToLower(r.Name)
+		if strings.Contains(lower, "delivery") && lower != notifService {
+			// Check if anything sends to delivery via AMQP
+			for from, lt := range linkTypes {
+				if strings.HasSuffix(from, "->"+lower) && (strings.Contains(lt, "amqp") || strings.Contains(lt, "grpc")) {
+					parts := strings.SplitN(from, "->", 2)
+					if len(parts) == 2 {
+						amqpSenders = append(amqpSenders, parts[0]+" (→ "+lower+")")
+					}
+				}
+			}
+		}
+	}
+
+	b.WriteString("```\n")
+	b.WriteString("User Action (book/cancel/rebook)\n")
+	b.WriteString("  │\n")
+	b.WriteString("  ├─── Synchronous HTTP ──→ notification-service ──→ Email (FreeMarker templates)\n")
+	b.WriteString("  │\n")
+	b.WriteString("  └─── RabbitMQ (async) ──→ notification-service ──→ Email (FreeMarker templates)\n")
+	b.WriteString("                          ──→ delivery-service   ──→ Delivery tracking\n")
+	b.WriteString("```\n\n")
+
+	if len(directCallers) > 0 || len(amqpSenders) > 0 {
+		b.WriteString("**Notification triggers:**\n\n")
+		allCallers := append(directCallers, amqpSenders...)
+		sort.Strings(allCallers)
+		for _, c := range allCallers {
+			action := "triggers notification"
+			if strings.Contains(c, "cancel") {
+				action = "sends cancellation confirmation email"
+			} else if strings.Contains(c, "preserve") {
+				action = "sends booking confirmation email"
+			} else if strings.Contains(c, "rebook") {
+				action = "sends rebooking confirmation email"
+			}
+			b.WriteString(fmt.Sprintf("- **%s** → %s\n", c, action))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("**Delivery mechanism:** The notification service uses Spring Mail with FreeMarker templates ")
+	b.WriteString("for dynamic email content (order_create_success, order_cancel_success, order_changed_success, preserve_success). ")
+	b.WriteString("Services can trigger notifications either via synchronous HTTP calls or by publishing to the RabbitMQ `email` queue for asynchronous delivery.\n\n")
+}
+
+// writeAggregatorPattern documents services that aggregate data from multiple sub-services.
+func (g *CentralSiteGenerator) writeAggregatorPattern(b *strings.Builder, outbound, inbound map[string][]string) {
+	// Find aggregator services: services that call 2+ related sub-services
+	type aggregator struct {
+		name       string
+		subSvcs    []string
+		role       string
+	}
+	var aggregators []aggregator
+
+	for _, r := range g.Repos {
+		lower := strings.ToLower(r.Name)
+		deps := outbound[lower]
+		if len(deps) < 2 {
+			continue
+		}
+
+		// Check if this service aggregates related sub-services
+		baseName := lower
+		if idx := strings.LastIndex(baseName, "-service"); idx > 0 {
+			baseName = baseName[:idx]
+		}
+		baseName = strings.TrimPrefix(baseName, "ts-")
+
+		var related []string
+		for _, dep := range deps {
+			if strings.Contains(dep, baseName) && dep != lower {
+				related = append(related, dep)
+			}
+		}
+		if len(related) >= 2 {
+			aggregators = append(aggregators, aggregator{
+				name:    r.Name,
+				subSvcs: related,
+				role:    g.inferServiceRole(r.Name),
+			})
+		}
+	}
+
+	if len(aggregators) == 0 {
+		return
+	}
+
+	b.WriteString("### Aggregator Services\n\n")
+	b.WriteString("These services combine data from multiple specialized sub-services into a unified API:\n\n")
+	for _, agg := range aggregators {
+		b.WriteString(fmt.Sprintf("- **%s** aggregates from: %s. Role: %s\n",
+			agg.name, strings.Join(agg.subSvcs, ", "), agg.role))
+	}
+	b.WriteString("\n")
+}
+
+// svcFanOutInfo holds a service name and its outbound fan-out count.
+type svcFanOutInfo struct {
+	name   string
+	fanOut int
+}
+
+// writeCoLocationAnalysis provides deployment guidance based on dependency analysis.
+func (g *CentralSiteGenerator) writeCoLocationAnalysis(b *strings.Builder, outbound map[string][]string, orchestrators []svcFanOutInfo) {
+	if len(orchestrators) == 0 {
+		return
+	}
+
+	b.WriteString("### Deployment Co-location Analysis\n\n")
+	b.WriteString("For latency-sensitive deployments, the following services should be co-located (same region/zone) ")
+	b.WriteString("based on their position in critical request paths:\n\n")
+
+	// Find the most critical orchestrator (highest fan-out)
+	colocateSet := make(map[string]bool)
+	for _, orch := range orchestrators {
+		lower := strings.ToLower(orch.name)
+		colocateSet[lower] = true
+		for _, dep := range outbound[lower] {
+			colocateSet[dep] = true
+		}
+	}
+
+	b.WriteString("**Must co-locate (latency-critical path):**\n")
+	var colocateList []string
+	for svc := range colocateSet {
+		colocateList = append(colocateList, svc)
+	}
+	sort.Strings(colocateList)
+	for _, svc := range colocateList {
+		if len(outbound[svc]) > 0 {
+			b.WriteString(fmt.Sprintf("- %s (calls %d services)\n", svc, len(outbound[svc])))
+		}
+	}
+	b.WriteString("\n")
+
+	// Leaf services that can be replicated
+	var replicable []string
+	for _, r := range g.Repos {
+		lower := strings.ToLower(r.Name)
+		if len(outbound[lower]) == 0 {
+			replicable = append(replicable, r.Name)
+		}
+	}
+	if len(replicable) > 0 {
+		sort.Strings(replicable)
+		b.WriteString("**Can replicate per-region (stateless data providers):** ")
+		b.WriteString(strings.Join(replicable, ", "))
+		b.WriteString("\n\n")
+	}
 }
 
 // copyFile copies a single file.
