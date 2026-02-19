@@ -31,8 +31,9 @@
 - **An interactive component map** — a D3.js force-directed graph showing how your files and packages connect
 - **A semantic vector database** — search your codebase in natural language from the CLI or through AI agents
 - **An MCP server** — plug directly into Claude Code, Cursor, or any MCP-compatible AI agent for instant codebase understanding
+- **Central multi-repo documentation** — register multiple repositories and generate a unified documentation site with cross-service dependency maps, architecture diagrams, flow narratives, and an interactive service map
 
-It works with **any language**, **any size** codebase.
+It works with **any language**, **any size** codebase — from single repos to 45+ microservice systems.
 
 ## Features
 
@@ -45,6 +46,7 @@ Use the AI provider you prefer — or run fully local with Ollama:
 | **Anthropic** | Claude Sonnet, Haiku | `ANTHROPIC_API_KEY` |
 | **OpenAI** | GPT-4o, GPT-4o-mini | `OPENAI_API_KEY` |
 | **Google** | Gemini 2.0 Flash/Pro | `GOOGLE_API_KEY` |
+| **OpenRouter** | Any model via OpenRouter | `OPENROUTER_API_KEY` |
 | **Ollama** | Any local model | None (local) |
 
 ### Quality Tiers
@@ -67,6 +69,33 @@ Generate a self-contained HTML site with:
 - Mermaid architecture and dependency diagrams
 - Interactive D3.js component map with feature clustering
 - Per-file documentation pages with function/class tables
+
+### Central Multi-Repo Documentation
+
+Document an entire microservice system — not just one repo. Register multiple repositories, and autodoc generates a unified site with:
+
+- **System overview** with registered services, cross-service dependency table, and Mermaid architecture diagram
+- **Architectural pattern detection** — parallel service pairs, leaf services, orchestrator analysis, payment layering, notification pipelines, aggregator patterns, and deployment co-location recommendations
+- **Business-aware flow synthesis** — named flows (e.g., "Ticket Booking Flow", "Cancellation and Refund Flow") with phased sequence diagrams, step-by-step narratives, critical path analysis, and parallelization opportunities
+- **Interactive service map** — D3.js force-directed graph of all services and their connections
+- **Per-service deep dives** — each registered repo's full documentation accessible from the central site
+
+```bash
+# 1. Document each service
+cd service-a && autodoc generate
+cd service-b && autodoc generate
+
+# 2. Set up the central site
+cd my-system && autodoc init
+autodoc repo add --path ../service-a
+autodoc repo add --path ../service-b
+autodoc repo sync-all
+
+# 3. Generate the unified site
+autodoc site --central --output .central/site
+```
+
+Tested at scale: 45-service microservice system with 4 languages, 400+ source files, producing 1,300+ documentation pages with 70+ cross-service links.
 
 ### Incremental Updates
 
@@ -146,6 +175,12 @@ That's it. Open `http://localhost:8080` and explore your codebase.
 | `autodoc update` | Incremental update — only re-processes changed files |
 | `autodoc site` | Generate static HTML documentation site |
 | `autodoc site --serve` | Generate and serve locally with live search |
+| `autodoc site --central` | Generate unified multi-repo documentation site |
+| `autodoc repo add` | Register a repository for central documentation |
+| `autodoc repo list` | List all registered repositories |
+| `autodoc repo remove` | Remove a registered repository |
+| `autodoc repo sync` | Sync a single repository's docs into central DB |
+| `autodoc repo sync-all` | Sync all registered repositories + discover cross-service links |
 | `autodoc query "..."` | Semantic search from the command line |
 | `autodoc serve` | Start MCP server for AI agent integration |
 | `autodoc cost` | Estimate API costs before generating |
@@ -163,6 +198,11 @@ autodoc update --force               # Re-process all files (skip git diff)
 
 autodoc site --serve --port 9090     # Serve on custom port
 autodoc site --serve --open          # Auto-open browser
+autodoc site --central               # Generate multi-repo central site
+
+autodoc repo add --path ./svc-a      # Register a local repo
+autodoc repo add --url https://github.com/org/svc-b  # Register a remote repo
+autodoc repo sync-all                # Import analyses + discover cross-service links
 
 autodoc query "how does auth work" --json --limit 5
 ```
@@ -172,7 +212,7 @@ autodoc query "how does auth work" --json --limit 5
 `autodoc init` generates `.autodoc.yml`:
 
 ```yaml
-provider: anthropic          # anthropic, openai, google, ollama
+provider: anthropic          # anthropic, openai, google, openrouter, ollama
 model: claude-sonnet-4-5-20250929
 embedding_provider: openai   # openai, google, or ollama
 embedding_model: text-embedding-3-small
@@ -207,6 +247,7 @@ The logo appears above the project title in the sidebar navigation. Supported fo
 | `ANTHROPIC_API_KEY` | Anthropic provider |
 | `OPENAI_API_KEY` | OpenAI provider / OpenAI embeddings |
 | `GOOGLE_API_KEY` | Google provider |
+| `OPENROUTER_API_KEY` | OpenRouter provider |
 | `OLLAMA_HOST` | Custom Ollama endpoint (default: `http://localhost:11434`) |
 
 ## GitHub Pages
@@ -268,7 +309,7 @@ internal/
   indexer/              Core pipeline — analysis, chunking, batching, state
   docs/                 Markdown generation, features, interactive map
   diagrams/             Mermaid diagram generation
-  site/                 Static site generator + dev server
+  site/                 Static site generator, dev server, central multi-repo site
   mcp/                  MCP server implementation
   context/              Business context collection + persistence
   progress/             Terminal progress reporting
