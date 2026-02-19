@@ -990,7 +990,7 @@ const jsContent = `(function() {
     try { localStorage.setItem("autodoc-theme", theme); } catch(e) {}
     // Re-render Mermaid diagrams with the new theme
     if (typeof mermaid !== "undefined") {
-      mermaid.initialize({ startOnLoad: false, theme: theme === "dark" ? "dark" : "default", securityLevel: "loose", maxEdges: 2000 });
+      mermaid.initialize({ startOnLoad: false, theme: theme === "dark" ? "dark" : "default", securityLevel: "loose", maxEdges: 2000, flowchart: { htmlLabels: true } });
       var reRenderPromises = [];
       document.querySelectorAll(".mermaid").forEach(function(el, idx) {
         var src = el.getAttribute("data-source");
@@ -1424,7 +1424,8 @@ const jsContent = `(function() {
       startOnLoad: false,
       theme: isDark ? "dark" : "default",
       securityLevel: "loose",
-      maxEdges: 2000
+      maxEdges: 2000,
+      flowchart: { htmlLabels: true }
     });
     // Convert <pre><code class="language-mermaid"> to rendered mermaid diagrams.
     // Use mermaid.render() with the source text directly as a string to avoid
