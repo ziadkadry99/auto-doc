@@ -20,6 +20,8 @@ const litePromptTemplate = `Analyze this %s file and return a JSON object with e
 
 Set "skip" to true if this file is NOT relevant to understanding the project's architecture or functionality — for example: .gitignore, lock files, generated code, changelog entries, license files, CI configs, editor configs, or other boilerplate that adds no insight. When skip is true, you can leave the other fields empty.
 
+IMPORTANT for configuration files (YAML, .properties, .env, JSON config, TOML): In the summary, list the actual configured values (topic names, URLs, ports, feature flags) — do NOT just describe them generically.
+
 Do NOT list shell commands (ls, cd, mkdir, cp) as dependencies.
 
 File path: %s
@@ -58,6 +60,11 @@ const normalPromptTemplate = `Analyze this %s file and return a JSON object with
 }
 
 Set "skip" to true if this file is NOT relevant to understanding the project's architecture or functionality — for example: .gitignore, lock files, generated code, changelog entries, license files, CI configs, editor configs, or other boilerplate that adds no insight. When skip is true, you can leave the other fields empty.
+
+IMPORTANT for configuration files (YAML, .properties, .env, JSON config, TOML):
+- In key_logic, list EVERY important key-value pair with its actual configured value — e.g. "topics.pcch = product-event-emitter-pcch-choice-id-transactional-v2-avro"
+- Do NOT summarize config values. The actual values (topic names, URLs, ports, feature flags, connection strings) are the most useful content for search.
+- Group related config entries together in a single key_logic entry if they belong to the same section.
 
 IMPORTANT for dependencies:
 - Use type "grpc" for gRPC service calls (e.g. ProductCatalogService, CurrencyService)
@@ -111,6 +118,11 @@ IMPORTANT for dependencies:
 - Use type "database" for database connections (Redis, PostgreSQL, etc.)
 - Use type "import" for library/package imports
 - Do NOT list shell commands (ls, cd, mkdir, cp, echo) as dependencies
+
+IMPORTANT for configuration files (YAML, .properties, .env, JSON config, TOML):
+- In key_logic, list EVERY important key-value pair with its actual configured value — e.g. "topics.pcch = product-event-emitter-pcch-choice-id-transactional-v2-avro"
+- Do NOT summarize config values. The actual values (topic names, URLs, ports, feature flags, connection strings) are the most useful content for search.
+- Group related config entries together in a single key_logic entry if they belong to the same section.
 
 Set "skip" to true if this file is NOT relevant to understanding the project's architecture or functionality — for example: .gitignore, lock files, generated code, changelog entries, license files, CI configs, editor configs, or other boilerplate that adds no insight. When skip is true, you can leave the other fields empty.
 
