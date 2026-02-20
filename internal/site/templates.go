@@ -837,6 +837,10 @@ body {
   color: var(--text);
 }
 
+.ai-answer-content p {
+  margin: 4px 0;
+}
+
 .ai-answer-content code {
   font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
   font-size: 0.85em;
@@ -844,6 +848,65 @@ body {
   padding: 1px 5px;
   border-radius: 3px;
   border: 1px solid var(--code-border);
+}
+
+.ai-answer-content h2, .ai-answer-content h3,
+.ai-answer-content h4, .ai-answer-content h5 {
+  margin: 16px 0 8px 0;
+  color: var(--text);
+  font-weight: 700;
+}
+.ai-answer-content h2 { font-size: 1.15rem; }
+.ai-answer-content h3 { font-size: 1.05rem; }
+.ai-answer-content h4 { font-size: 0.95rem; }
+
+.ai-answer-content ul, .ai-answer-content ol {
+  margin: 6px 0 6px 20px;
+  padding: 0;
+}
+.ai-answer-content li {
+  margin: 3px 0;
+}
+
+.ai-answer-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+.ai-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 0.85rem;
+}
+.ai-table th, .ai-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.ai-table th {
+  background: var(--code-bg);
+  font-weight: 700;
+}
+.ai-table tr:nth-child(even) {
+  background: var(--hover);
+}
+
+.ai-code-block {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.ai-code-block code {
+  background: none;
+  border: none;
+  padding: 0;
 }
 
 /* ============ Mermaid Diagrams ============ */
@@ -1256,8 +1319,132 @@ const jsContent = `(function() {
   }
 
   function formatAnswerHtml(text) {
-    // Convert backtick-wrapped text to <code> elements.
-    return escapeHtml(text).replace(/` + "`" + `([^` + "`" + `]+)` + "`" + `/g, '<code>$1</code>');
+    // Lightweight markdown-to-HTML renderer for AI answers.
+    var lines = text.split('\n');
+    var html = '';
+    var inTable = false;
+    var inList = false;
+    var listType = '';
+    var inCodeBlock = false;
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+
+      // Fenced code blocks
+      if (line.trim().indexOf('` + "```" + `') === 0) {
+        if (inCodeBlock) {
+          html += '</code></pre>';
+          inCodeBlock = false;
+        } else {
+          if (inList) { html += listType === 'ul' ? '</ul>' : '</ol>'; inList = false; }
+          if (inTable) { html += '</tbody></table>'; inTable = false; }
+          inCodeBlock = true;
+          html += '<pre class="ai-code-block"><code>';
+        }
+        continue;
+      }
+      if (inCodeBlock) {
+        html += escapeHtml(line) + '\n';
+        continue;
+      }
+
+      // Table rows
+      if (line.trim().indexOf('|') === 0 && line.trim().lastIndexOf('|') > 0) {
+        var cells = line.split('|').slice(1);
+        if (cells[cells.length - 1].trim() === '') cells = cells.slice(0, -1);
+        // Separator row (|---|---|)
+        if (/^\s*[-:]+\s*$/.test(cells[0])) {
+          continue;
+        }
+        if (!inTable) {
+          if (inList) { html += listType === 'ul' ? '</ul>' : '</ol>'; inList = false; }
+          inTable = true;
+          html += '<table class="ai-table"><thead><tr>';
+          for (var c = 0; c < cells.length; c++) {
+            html += '<th>' + inlineFormat(cells[c].trim()) + '</th>';
+          }
+          html += '</tr></thead><tbody>';
+          continue;
+        }
+        html += '<tr>';
+        for (var c = 0; c < cells.length; c++) {
+          html += '<td>' + inlineFormat(cells[c].trim()) + '</td>';
+        }
+        html += '</tr>';
+        continue;
+      }
+      if (inTable) { html += '</tbody></table>'; inTable = false; }
+
+      // Headings
+      var headingMatch = line.match(/^(#{1,4})\s+(.+)$/);
+      if (headingMatch) {
+        if (inList) { html += listType === 'ul' ? '</ul>' : '</ol>'; inList = false; }
+        var level = headingMatch[1].length + 1;
+        if (level > 6) level = 6;
+        html += '<h' + level + ' class="ai-heading">' + inlineFormat(headingMatch[2]) + '</h' + level + '>';
+        continue;
+      }
+
+      // Horizontal rule
+      if (/^[-*_]{3,}\s*$/.test(line.trim())) {
+        if (inList) { html += listType === 'ul' ? '</ul>' : '</ol>'; inList = false; }
+        html += '<hr>';
+        continue;
+      }
+
+      // Unordered list items
+      var ulMatch = line.match(/^(\s*)[*\-+]\s+(.+)$/);
+      if (ulMatch) {
+        if (!inList || listType !== 'ul') {
+          if (inList) html += listType === 'ul' ? '</ul>' : '</ol>';
+          html += '<ul>';
+          inList = true;
+          listType = 'ul';
+        }
+        html += '<li>' + inlineFormat(ulMatch[2]) + '</li>';
+        continue;
+      }
+
+      // Ordered list items
+      var olMatch = line.match(/^(\s*)\d+[.)]\s+(.+)$/);
+      if (olMatch) {
+        if (!inList || listType !== 'ol') {
+          if (inList) html += listType === 'ul' ? '</ul>' : '</ol>';
+          html += '<ol>';
+          inList = true;
+          listType = 'ol';
+        }
+        html += '<li>' + inlineFormat(olMatch[2]) + '</li>';
+        continue;
+      }
+
+      if (inList && line.trim() === '') {
+        html += listType === 'ul' ? '</ul>' : '</ol>';
+        inList = false;
+        continue;
+      }
+
+      if (line.trim() === '') {
+        continue;
+      }
+
+      html += '<p>' + inlineFormat(line) + '</p>';
+    }
+
+    if (inList) html += listType === 'ul' ? '</ul>' : '</ol>';
+    if (inTable) html += '</tbody></table>';
+    if (inCodeBlock) html += '</code></pre>';
+
+    return html;
+  }
+
+  function inlineFormat(text) {
+    var s = escapeHtml(text);
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    s = s.replace(/` + "`" + `([^` + "`" + `]+)` + "`" + `/g, '<code>$1</code>');
+    return s;
   }
 
   function showAIResults(query, results, answer) {
